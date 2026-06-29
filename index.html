@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Komoot POI Explorer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --komoot: #6db33f; --komoot-dark: #4a8a28;
+      --bg: #f5f5f0; --card: #fff; --text: #2c2c2c; --muted: #777;
+      --border: #e0e0d8; --visited-bg: #f0f0e8; --visited-text: #aaa;
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    /* App shell */
+    #app-screen { display: flex; flex-direction: column; min-height: 100vh; }
+    header { background: var(--komoot); color: #fff; padding: 0.7rem 1.25rem; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+    header h1 { font-size: 1.05rem; font-weight: 700; }
+    .header-right { display: flex; align-items: center; gap: 0.75rem; }
+    .header-right span { font-size: 0.82rem; opacity: 0.88; }
+    .btn-small { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.35); color: #fff; padding: 0.3rem 0.7rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem; font-weight: 600; transition: background 0.15s; }
+    .btn-small:hover { background: rgba(255,255,255,0.35); }
+
+    /* Controls */
+    .controls { background: var(--card); border-bottom: 1px solid var(--border); padding: 0.75rem 1.25rem; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: flex-end; }
+    .cg { display: flex; flex-direction: column; gap: 0.28rem; }
+    .cg label { font-size: 0.75rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .cg input, .cg select { padding: 0.42rem 0.65rem; border: 1.5px solid var(--border); border-radius: 6px; font-size: 0.88rem; background: var(--bg); outline: none; transition: border-color 0.15s; }
+    .cg input:focus, .cg select:focus { border-color: var(--komoot); }
+    .cg input[type="number"] { width: 95px; }
+    .cg select { min-width: 130px; }
+    .btn-search { padding: 0.48rem 1.2rem; background: var(--komoot); color: #fff; border: none; border-radius: 6px; font-size: 0.9rem; font-weight: 700; cursor: pointer; align-self: flex-end; transition: background 0.15s; }
+    .btn-search:hover { background: var(--komoot-dark); }
+    .btn-search:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-locate { padding: 0.48rem 0.8rem; background: var(--bg); border: 1.5px solid var(--border); border-radius: 6px; font-size: 0.85rem; cursor: pointer; align-self: flex-end; white-space: nowrap; transition: border-color 0.15s; }
+    .btn-locate:hover { border-color: var(--komoot); }
+
+    /* Filter bar */
+    .filter-bar { background: var(--card); border-bottom: 1px solid var(--border); padding: 0.45rem 1.25rem; display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
+    .filter-bar label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.83rem; cursor: pointer; user-select: none; }
+    .filter-bar input[type="checkbox"] { accent-color: var(--komoot); width: 14px; height: 14px; cursor: pointer; }
+    .results-count { margin-left: auto; font-size: 0.8rem; color: var(--muted); }
+
+    /* Results */
+    #results-area { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; }
+    .poi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+    .poi-card { background: var(--card); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; border: 1.5px solid transparent; transition: transform 0.12s, box-shadow 0.12s; }
+    .poi-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.11); }
+    .poi-card.visited { background: var(--visited-bg); border-color: var(--border); opacity: 0.65; }
+    .poi-thumb { width: 100%; height: 130px; background: #deebd0; display: flex; align-items: center; justify-content: center; font-size: 2.8rem; }
+    .poi-body { padding: 0.8rem; }
+    .poi-badge { display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; background: var(--komoot); color: #fff; padding: 0.18rem 0.5rem; border-radius: 4px; margin-bottom: 0.45rem; }
+    .poi-card.visited .poi-badge { background: var(--muted); }
+    .poi-name { font-size: 0.97rem; font-weight: 700; line-height: 1.35; margin-bottom: 0.35rem; }
+    .poi-card.visited .poi-name { color: var(--visited-text); }
+    .poi-meta { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.6rem; }
+    .poi-dist { font-weight: 700; color: var(--komoot); }
+    .poi-card.visited .poi-dist { color: var(--muted); }
+    .poi-actions { display: flex; gap: 0.5rem; }
+    .btn-link { flex: 1; padding: 0.42rem; border: 1.5px solid var(--komoot); color: var(--komoot); background: transparent; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer; text-align: center; text-decoration: none; display: block; transition: background 0.12s, color 0.12s; }
+    .btn-link:hover { background: var(--komoot); color: #fff; }
+    .btn-vis { flex: 1; padding: 0.42rem; border: 1.5px solid var(--border); color: var(--muted); background: transparent; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer; text-align: center; transition: all 0.12s; }
+    .btn-vis:hover { border-color: #999; color: #444; }
+    .poi-card.visited .btn-vis { background: #999; color: #fff; border-color: #999; }
+
+    /* States */
+    .state-msg { text-align: center; color: var(--muted); padding: 3rem 1rem; font-size: 0.93rem; line-height: 1.9; }
+    .state-msg .ico { font-size: 2.8rem; display: block; margin-bottom: 0.5rem; }
+    .spinner { width: 34px; height: 34px; border: 3px solid var(--border); border-top-color: var(--komoot); border-radius: 50%; animation: spin 0.65s linear infinite; margin: 0 auto 1rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .info-banner { background: #e8f4e8; border: 1px solid #b8ddb8; border-radius: 8px; padding: 0.7rem 1rem; margin-bottom: 1rem; font-size: 0.83rem; color: #2a5c2a; line-height: 1.5; }
+    .warn-banner { background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 0.7rem 1rem; margin-bottom: 1rem; font-size: 0.83rem; color: #7a5c00; line-height: 1.5; }
+
+    /* Gist sync panel */
+    #gist-panel { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 1rem; }
+    #gist-panel.open { display: flex; }
+    .gist-card { background: var(--card); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); padding: 1.75rem; width: 100%; max-width: 420px; }
+    .gist-card h2 { font-size: 1.1rem; margin-bottom: 0.35rem; }
+    .gist-card .hint { font-size: 0.8rem; color: var(--muted); margin-bottom: 1.25rem; line-height: 1.6; }
+    .gist-card .hint a { color: var(--komoot); }
+    .gist-row { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .gist-row input { flex: 1; padding: 0.5rem 0.75rem; border: 1.5px solid var(--border); border-radius: 6px; font-size: 0.88rem; font-family: monospace; outline: none; }
+    .gist-row input:focus { border-color: var(--komoot); }
+    .gist-status { font-size: 0.8rem; min-height: 1.2em; margin-bottom: 0.75rem; }
+    .gist-status.ok  { color: #2a5c2a; }
+    .gist-status.err { color: #c0392b; }
+    .gist-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+    .btn-outline { padding: 0.45rem 1rem; border: 1.5px solid var(--border); background: transparent; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: border-color 0.15s; }
+    .btn-outline:hover { border-color: #999; }
+    .sync-indicator { font-size: 0.72rem; opacity: 0.8; }
+      .cg input[type="number"] { width: 78px; }
+      .poi-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- APP -->
+<div id="app-screen">
+  <header>
+    <h1>&#127748; POI Explorer</h1>
+    <div class="header-right">
+      <span class="sync-indicator" id="sync-indicator"></span>
+      <button class="btn-small" id="gist-btn" title="Sync visited with GitHub Gist">&#128279; Sync</button>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="cg" style="flex:1;min-width:200px;">
+      <label>Place / City / Postcode</label>
+      <div style="display:flex;gap:0.4rem;">
+        <input type="text" id="place-input" placeholder="Stuttgart, 70173, Germany…" style="flex:1;" />
+        <button class="btn-locate" id="geocode-btn" style="align-self:auto;white-space:nowrap;">&#128269;</button>
+      </div>
+    </div>
+    <div class="cg">
+      <label>Latitude</label>
+      <input type="number" id="lat-input" placeholder="48.137" step="0.0001" />
+    </div>
+    <div class="cg">
+      <label>Longitude</label>
+      <input type="number" id="lng-input" placeholder="11.576" step="0.0001" />
+    </div>
+    <div class="cg">
+      <label>Max results</label>
+      <input type="number" id="limit-input" value="500" min="10" max="5000" step="10" />
+      <span style="font-size:0.7rem;color:var(--muted);">Cap on POIs returned</span>
+    </div>
+    <div class="cg">
+      <label>Radius (km)</label>
+      <input type="number" id="radius-input" value="10" min="1" max="100" step="1" />
+      <span style="font-size:0.7rem;color:var(--muted);">Search area around location</span>
+    </div>
+    <div class="cg">
+      <label>Sort by</label>
+      <select id="sort-select">
+        <option value="distance">Distance</option>
+        <option value="name">Name A–Z</option>
+        <option value="elevation">Elevation</option>
+        <option value="type">Type</option>
+      </select>
+    </div>
+    <button class="btn-locate" id="locate-btn">&#128205; My Location</button>
+    <button class="btn-search" id="search-btn">Search</button>
+  </div>
+
+  <div class="filter-bar">
+    <label><input type="checkbox" id="hide-visited" /> Hide visited</label>
+    <label><input type="checkbox" id="hide-unnamed" checked /> Hide unnamed</label>
+    <span class="results-count" id="results-count"></span>
+  </div>
+
+  <div id="results-area">
+    <div class="state-msg">
+      <span class="ico">&#127956;</span>
+      Enter a location and tap <strong>Search</strong>, or use <strong>&#128205; My Location</strong>.
+    </div>
+  </div>
+</div>
+
+<!-- GIST SYNC PANEL -->
+<div id="gist-panel">
+  <div class="gist-card">
+    <h2>&#128279; GitHub Gist Sync</h2>
+    <p class="hint">
+      Your visited POIs are saved to a private GitHub Gist and synced across devices.<br/>
+      Create a token at <a href="https://github.com/settings/tokens/new?scopes=gist&description=POI+Explorer" target="_blank" rel="noopener">github.com/settings/tokens</a> with the <strong>gist</strong> scope.
+    </p>
+    <div class="gist-row">
+      <input type="password" id="gist-token-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+    </div>
+    <div class="gist-status" id="gist-status"></div>
+    <div class="gist-actions">
+      <button class="btn-outline" id="gist-cancel">Cancel</button>
+      <button class="btn-outline" id="gist-disconnect" style="display:none;color:#c0392b;border-color:#c0392b;">Disconnect</button>
+      <button class="btn-primary" id="gist-connect" style="width:auto;padding:0.45rem 1.25rem;margin-top:0;">Connect</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const VISITED_KEY = 'komoot_poi_visited_v1';
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+const OSM_FILTERS = [
+  ['natural','peak'], ['natural','volcano'], ['natural','waterfall'],
+  ['natural','spring'], ['natural','cave_entrance'], ['natural','arch'],
+  ['natural','rock'], ['natural','tree'],
+  ['tourism','viewpoint'], ['tourism','attraction'], ['tourism','artwork'],
+  ['historic','ruins'], ['historic','castle'], ['historic','monument'],
+  ['historic','memorial'], ['historic','archaeological_site'],
+  ['leisure','nature_reserve'], ['amenity','shelter'],
+];
+const OSM_TYPE_MAP = {
+  peak:'summit', volcano:'summit', waterfall:'waterfall', spring:'spring',
+  cave_entrance:'cave', arch:'natural_feature', rock:'natural_feature',
+  tree:'natural_feature', viewpoint:'viewpoint', attraction:'attraction',
+  artwork:'artwork', ruins:'historic', castle:'historic', monument:'historic',
+  memorial:'historic', archaeological_site:'historic',
+  nature_reserve:'nature_reserve', shelter:'shelter',
+};
+
+// ── DOM ───────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let allItems = [];
+let visited = new Set(JSON.parse(localStorage.getItem(VISITED_KEY) || '[]'));
+
+function saveVisited() {
+  localStorage.setItem(VISITED_KEY, JSON.stringify([...visited]));
+  gistPush();
+}
+
+// ── GitHub Gist Sync ──────────────────────────────────────────────────────────
+const GIST_TOKEN_KEY = 'poi_gist_token';
+const GIST_ID_KEY    = 'poi_gist_id';
+const GIST_FILENAME  = 'poi-visited.json';
+
+let gistToken = localStorage.getItem(GIST_TOKEN_KEY) || null;
+let gistId    = localStorage.getItem(GIST_ID_KEY)    || null;
+let gistPushTimer = null;
+
+function setSync(msg, type) {
+  const el = $('sync-indicator');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = type === 'err' ? '#ffcccc' : 'rgba(255,255,255,0.85)';
+}
+
+async function gistPull() {
+  if (!gistToken) return;
+  try {
+    setSync('↓ syncing…');
+    const headers = { Authorization: 'token ' + gistToken, Accept: 'application/vnd.github+json' };
+    let data;
+    if (gistId) {
+      const r = await fetch(`https://api.github.com/gists/${gistId}`, { headers });
+      if (!r.ok) throw new Error('Gist not found');
+      data = await r.json();
+    } else {
+      // Find existing gist by filename
+      const r = await fetch('https://api.github.com/gists', { headers });
+      const list = await r.json();
+      const found = list.find(g => g.files[GIST_FILENAME]);
+      if (found) { gistId = found.id; localStorage.setItem(GIST_ID_KEY, gistId); data = found; }
+    }
+    if (data?.files?.[GIST_FILENAME]?.raw_url) {
+      const r = await fetch(data.files[GIST_FILENAME].raw_url);
+      const json = await r.json();
+      const remote = new Set(json.visited || []);
+      // Merge remote into local
+      let added = 0;
+      for (const id of remote) { if (!visited.has(id)) { visited.add(id); added++; } }
+      if (added > 0) { localStorage.setItem(VISITED_KEY, JSON.stringify([...visited])); renderList(); }
+      setSync('✓ synced');
+    } else {
+      setSync('✓ connected');
+    }
+  } catch (e) { setSync('⚠ sync err', 'err'); }
+}
+
+async function gistPush() {
+  if (!gistToken) return;
+  clearTimeout(gistPushTimer);
+  // Debounce — wait 1.5s after last change before pushing
+  gistPushTimer = setTimeout(async () => {
+    try {
+      setSync('↑ saving…');
+      const headers = { Authorization: 'token ' + gistToken, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' };
+      const body = JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify({ visited: [...visited] }) } } });
+      let r;
+      if (gistId) {
+        r = await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers, body });
+      } else {
+        r = await fetch('https://api.github.com/gists', { method: 'POST', headers, body: JSON.stringify({ description: 'POI Explorer visited list', public: false, files: { [GIST_FILENAME]: { content: JSON.stringify({ visited: [...visited] }) } } }) });
+        if (r.ok) { const d = await r.json(); gistId = d.id; localStorage.setItem(GIST_ID_KEY, gistId); return; }
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      setSync('✓ saved');
+    } catch (e) { setSync('⚠ save err', 'err'); }
+  }, 1500);
+}
+
+// Gist panel UI
+$('gist-btn').addEventListener('click', () => {
+  $('gist-token-input').value = gistToken || '';
+  $('gist-status').textContent = gistId ? `Connected (Gist ID: ${gistId})` : '';
+  $('gist-status').className = 'gist-status ok';
+  $('gist-disconnect').style.display = gistToken ? 'block' : 'none';
+  $('gist-panel').classList.add('open');
+});
+$('gist-cancel').addEventListener('click', () => $('gist-panel').classList.remove('open'));
+$('gist-panel').addEventListener('click', e => { if (e.target === $('gist-panel')) $('gist-panel').classList.remove('open'); });
+
+$('gist-connect').addEventListener('click', async () => {
+  const token = $('gist-token-input').value.trim();
+  if (!token) { setGistStatus('Enter a token first.', 'err'); return; }
+  setGistStatus('Connecting…', '');
+  try {
+    const r = await fetch('https://api.github.com/user', { headers: { Authorization: 'token ' + token } });
+    if (!r.ok) throw new Error('Invalid token (HTTP ' + r.status + ')');
+    const user = await r.json();
+    gistToken = token;
+    gistId = null;
+    localStorage.setItem(GIST_TOKEN_KEY, token);
+    localStorage.removeItem(GIST_ID_KEY);
+    setGistStatus('✓ Connected as ' + user.login + '. Pulling data…', 'ok');
+    $('gist-disconnect').style.display = 'block';
+    await gistPull();
+    setGistStatus('✓ Connected as ' + user.login, 'ok');
+  } catch (e) { setGistStatus('Error: ' + e.message, 'err'); }
+});
+
+$('gist-disconnect').addEventListener('click', () => {
+  gistToken = null; gistId = null;
+  localStorage.removeItem(GIST_TOKEN_KEY);
+  localStorage.removeItem(GIST_ID_KEY);
+  $('gist-disconnect').style.display = 'none';
+  setGistStatus('Disconnected.', '');
+  setSync('');
+});
+
+function setGistStatus(msg, type) {
+  const el = $('gist-status');
+  el.textContent = msg;
+  el.className = 'gist-status ' + (type || '');
+}
+
+// Pull on startup if token exists
+if (gistToken) gistPull();
+
+// ── Geolocation ───────────────────────────────────────────────────────────────
+$('locate-btn').addEventListener('click', () => {
+  const btn = $('locate-btn');
+  btn.textContent = '⏳ Locating…'; btn.disabled = true;
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      $('lat-input').value = pos.coords.latitude.toFixed(6);
+      $('lng-input').value = pos.coords.longitude.toFixed(6);
+      btn.textContent = '📍 My Location'; btn.disabled = false;
+      doSearch();
+    },
+    err => { alert('Could not get location: ' + err.message); btn.textContent = '📍 My Location'; btn.disabled = false; },
+    { timeout: 10000 }
+  );
+});
+
+// ── Search ────────────────────────────────────────────────────────────────────
+$('search-btn').addEventListener('click', doSearch);
+$('hide-visited').addEventListener('change', renderList);
+$('hide-unnamed').addEventListener('change', renderList);
+$('sort-select').addEventListener('change', renderList);
+
+async function doSearch() {
+  const lat = parseFloat($('lat-input').value);
+  const lng = parseFloat($('lng-input').value);
+  const radius = (parseFloat($('radius-input').value) || 10) * 1000;
+  const limit = parseInt($('limit-input').value) || 500;
+  if (isNaN(lat) || isNaN(lng)) { alert('Please enter a location or tap My Location.'); return; }
+
+  const btn = $('search-btn');
+  btn.disabled = true; btn.textContent = 'Searching…';
+  showLoading('Querying OpenStreetMap…');
+
+  try {
+    allItems = await fetchOsmPoi(lat, lng, radius, limit);
+    renderList();
+  } catch (err) {
+    showError('Search failed', err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Search';
+  }
+}
+
+// ── Geocoding (Nominatim) ─────────────────────────────────────────────────────
+$('geocode-btn').addEventListener('click', doGeocode);
+$('place-input').addEventListener('keydown', e => { if (e.key === 'Enter') doGeocode(); });
+
+async function doGeocode() {
+  const q = $('place-input').value.trim();
+  if (!q) return;
+  const btn = $('geocode-btn');
+  btn.textContent = '⏳'; btn.disabled = true;
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
+      { headers: { 'Accept-Language': 'en', 'User-Agent': 'POI-Explorer/1.0' } }
+    );
+    const results = await res.json();
+    if (!results.length) { alert('Place not found. Try a more specific search, e.g. "Stuttgart, Germany".'); return; }
+    const { lat, lon, display_name } = results[0];
+    $('lat-input').value = parseFloat(lat).toFixed(6);
+    $('lng-input').value = parseFloat(lon).toFixed(6);
+    $('place-input').value = display_name.split(',').slice(0, 3).join(',');
+    doSearch();
+  } catch (e) {
+    alert('Geocoding failed: ' + e.message);
+  } finally {
+    btn.textContent = '🔍'; btn.disabled = false;
+  }
+}
+
+// ── Overpass / OSM ────────────────────────────────────────────────────────────
+async function fetchOsmPoi(lat, lng, radius, limit = 500) {
+  // Use regex unions to keep the query short (important for proxy GET fallback)
+  const ar = `(around:${radius},${lat},${lng})`;
+  const query = `[out:json][timeout:25];
+(
+  node["natural"~"peak|volcano|waterfall|spring|cave_entrance|arch|rock|tree"]${ar};
+  node["tourism"~"viewpoint|attraction|artwork"]${ar};
+  node["historic"~"ruins|castle|monument|memorial|archaeological_site"]${ar};
+  node["leisure"="nature_reserve"]${ar};
+  node["amenity"="shelter"]${ar};
+);
+out body ${limit};`;
+
+  // 1. Try direct POST to each Overpass endpoint (works when served over http/https)
+  for (const ep of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(ep, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.elements) return data.elements.map(el => osmToItem(el, lat, lng));
+    } catch (_) {}
+  }
+
+  // 2. Proxy GET fallback — needed when opening from file:// (null origin blocks CORS)
+  // Build target URL with query as a GET param (single encodeURIComponent on the query)
+  const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
+  const proxies = [
+    'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl),
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl),
+  ];
+
+  let lastErr;
+  for (const url of proxies) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
+      const data = await res.json();
+      if (data.elements) return data.elements.map(el => osmToItem(el, lat, lng));
+      lastErr = new Error('Unexpected response format');
+    } catch (e) {
+      lastErr = e.name === 'TimeoutError' ? new Error('Request timed out') : e;
+    }
+  }
+  throw lastErr || new Error('All Overpass endpoints failed');
+}
+
+function osmToItem(el, cLat, cLng) {
+  const tags = el.tags || {};
+  let type = 'poi';
+  for (const [k, v] of OSM_FILTERS) {
+    if (tags[k] === v) { type = OSM_TYPE_MAP[v] || 'poi'; break; }
+  }
+  const name = tags.name || tags['name:en'] || tags['name:de'] || null;
+  return {
+    id: 'osm_' + el.id,
+    type,
+    name: name || typeLabel(type),
+    hasName: !!name,
+    lat: el.lat, lng: el.lon,
+    distance_m: haversine(cLat, cLng, el.lat, el.lon),
+    elevation: tags.ele ? parseInt(tags.ele) : null,
+    osm_url: `https://www.openstreetmap.org/node/${el.id}`,
+    gmaps_url: `https://maps.google.com/?q=${el.lat.toFixed(7)},${el.lon.toFixed(7)}`,
+    wiki: tags.wikipedia || tags.wikidata || null,
+    tags,
+  };
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderList() {
+  const hideVisited = $('hide-visited').checked;
+  const hideUnnamed = $('hide-unnamed').checked;
+  const sortBy = $('sort-select').value;
+
+  let items = [...allItems];
+  if (hideVisited) items = items.filter(p => !visited.has(p.id));
+  if (hideUnnamed) items = items.filter(p => p.hasName);
+
+  items.sort((a, b) => {
+    if (sortBy === 'distance')  return (a.distance_m ?? Infinity) - (b.distance_m ?? Infinity);
+    if (sortBy === 'name')      return a.name.localeCompare(b.name);
+    if (sortBy === 'elevation') return (b.elevation ?? -Infinity) - (a.elevation ?? -Infinity);
+    if (sortBy === 'type')      return a.type.localeCompare(b.type);
+    return 0;
+  });
+
+  const shown = items.length, total = allItems.length;
+  $('results-count').textContent = shown === total
+    ? `${total} result${total !== 1 ? 's' : ''}`
+    : `${shown} of ${total} shown`;
+
+  const area = $('results-area');
+  const banners = [...area.querySelectorAll('.info-banner,.warn-banner')];
+  area.innerHTML = '';
+  banners.forEach(b => area.appendChild(b));
+
+  if (items.length === 0) {
+    const msg = document.createElement('div');
+    msg.className = 'state-msg';
+    msg.innerHTML = allItems.length === 0
+      ? '<span class="ico">🔍</span>No results found.<br/>Try a larger radius or different location.'
+      : '<span class="ico">✅</span>All results hidden by current filters.';
+    area.appendChild(msg);
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'poi-grid';
+  items.forEach(poi => grid.appendChild(makeCard(poi)));
+  area.appendChild(grid);
+}
+
+function makeCard(poi) {
+  const isVisited = visited.has(poi.id);
+  const card = document.createElement('div');
+  card.className = 'poi-card' + (isVisited ? ' visited' : '');
+
+  const dist = poi.distance_m < 1000
+    ? Math.round(poi.distance_m) + ' m'
+    : (poi.distance_m / 1000).toFixed(1) + ' km';
+  const ele = poi.elevation != null ? `<span>⛰️ ${poi.elevation} m</span>` : '';
+
+  const wikiHref = poi.wiki
+    ? poi.wiki.includes(':')
+      ? `https://${poi.wiki.split(':')[0]}.wikipedia.org/wiki/${encodeURIComponent(poi.wiki.split(':').slice(1).join(':'))}`
+      : `https://www.wikidata.org/wiki/${poi.wiki}`
+    : null;
+
+  card.innerHTML = `
+    <div class="poi-thumb">${typeIcon(poi.type)}</div>
+    <div class="poi-body">
+      <div class="poi-badge">${esc(typeLabel(poi.type))}</div>
+      <div class="poi-name">${esc(poi.name)}</div>
+      <div class="poi-meta">
+        <span class="poi-dist">📍 ${dist}</span>
+        ${ele}
+      </div>
+      <div class="poi-actions">
+        <a href="${esc(poi.osm_url)}" target="_blank" rel="noopener noreferrer" class="btn-link">OSM</a>
+        <a href="${esc(poi.gmaps_url)}" target="_blank" rel="noopener noreferrer" class="btn-link">Maps</a>
+        ${wikiHref ? `<a href="${esc(wikiHref)}" target="_blank" rel="noopener noreferrer" class="btn-link">Wiki</a>` : ''}
+        <button class="btn-vis">${isVisited ? '✅ Visited' : 'Mark Visited'}</button>
+      </div>
+    </div>`;
+
+  card.querySelector('.btn-vis').addEventListener('click', () => {
+    visited.has(poi.id) ? visited.delete(poi.id) : visited.add(poi.id);
+    saveVisited();
+    renderList();
+  });
+  return card;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function showLoading(msg) {
+  $('results-area').innerHTML = `<div class="state-msg"><div class="spinner"></div>${msg || 'Searching…'}</div>`;
+  $('results-count').textContent = '';
+}
+function showError(title, detail) {
+  $('results-area').innerHTML = `<div class="state-msg"><span class="ico">⚠️</span><strong>${esc(title)}</strong><br/><small>${esc(detail || '')}</small></div>`;
+}
+function addBanner(type, msg) {
+  const el = document.createElement('div');
+  el.className = type === 'warn' ? 'warn-banner' : 'info-banner';
+  el.textContent = msg;
+  $('results-area').prepend(el);
+}
+
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function typeLabel(t) {
+  return ({summit:'Summit',waterfall:'Waterfall',viewpoint:'Viewpoint',spring:'Spring',
+    cave:'Cave',natural_feature:'Natural Feature',historic:'Historic',attraction:'Attraction',
+    artwork:'Artwork',nature_reserve:'Nature Reserve',shelter:'Shelter',poi:'POI'})[t]
+    || (t||'POI').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+}
+function typeIcon(t) {
+  return ({summit:'🏔️',waterfall:'💧',viewpoint:'👁️',spring:'🌊',cave:'🕳️',
+    natural_feature:'🌿',historic:'🏛️',attraction:'⭐',artwork:'🎨',
+    nature_reserve:'🌲',shelter:'🏕️',poi:'📍'})[t] || '📍';
+}
+</script>
+</body>
+</html>
