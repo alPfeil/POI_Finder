@@ -937,6 +937,7 @@ function makeCard(poi) {
         <a href="${esc(poi.osm_url)}" target="_blank" rel="noopener noreferrer" class="btn-link">OSM</a>
         <a href="${esc(poi.gmaps_url)}" target="_blank" rel="noopener noreferrer" class="btn-link">Maps</a>
         ${wikiHref ? `<a href="${esc(wikiHref)}" target="_blank" rel="noopener noreferrer" class="btn-link">Wiki</a>` : ''}
+        <button class="btn-copy-coords btn-link" data-lat="${poi.lat}" data-lng="${poi.lng}" title="${poi.lat}, ${poi.lng}">📋 Coords</button>
         <button class="btn-vis">${isVisited ? '✅ Visited' : 'Mark Visited'}</button>
       </div>
       <div class="poi-note-area">
@@ -944,6 +945,16 @@ function makeCard(poi) {
         <textarea class="poi-note-input" data-id="${esc(poi.id)}" rows="2" placeholder="Your notes about this place…">${notes[poi.id] ? esc(notes[poi.id]) : ''}</textarea>
       </div>
     </div>`;
+
+  // Copy coords
+  card.querySelector('.btn-copy-coords').addEventListener('click', function() {
+    const coords = `${this.dataset.lat}, ${this.dataset.lng}`;
+    navigator.clipboard.writeText(coords).then(() => {
+      const orig = this.textContent;
+      this.textContent = '✓ Copied';
+      setTimeout(() => this.textContent = orig, 1500);
+    });
+  });
 
   // Stars
   const starsEl = card.querySelector('.stars');
