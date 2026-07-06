@@ -334,6 +334,8 @@ const SEARCH_KEY       = 'komoot_poi_search_v1';
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.openstreetmap.ru/api/interpreter',
 ];
 const OSM_FILTERS = [
   ['natural','peak'], ['natural','volcano'], ['natural','waterfall'],
@@ -851,42 +853,34 @@ async function fetchOsmPoi(lat, lng, radius, limit = 50) {
   const clauses = enabledTypes.map(t => '  ' + TYPE_QUERIES[t](ar)).join('\n');
   const query = `[out:json][timeout:25];\n(\n${clauses}\n);\nout body ${limit};`;
 
-  const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
-  const allEndpoints = [
-    { method: 'POST', url: OVERPASS_ENDPOINTS[0], body: 'data=' + encodeURIComponent(query) },
-    { method: 'POST', url: OVERPASS_ENDPOINTS[1], body: 'data=' + encodeURIComponent(query) },
-    { method: 'GET',  url: 'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl) },
-    { method: 'GET',  url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl) },
-  ];
-
-  const tryEndpoint = async ({ method, url, body }) => {
-    const opts = { method, signal: AbortSignal.timeout(18000) };
-    if (body) { opts.headers = { 'Content-Type': 'application/x-www-form-urlencoded' }; opts.body = body; }
-    const res = await fetch(url, opts);
+  const postOpts = { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) };
+  const parse = async res => {
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    if (!data.elements) throw new Error('Unexpected response format');
-    return data.elements.map(el => osmToItem(el, lat, lng));
+    const d = await res.json();
+    if (!d.elements) throw new Error('No elements in response');
+    return d.elements.map(el => osmToItem(el, lat, lng));
   };
 
-  return new Promise((resolve, reject) => {
-    let settled = false, remaining = allEndpoints.length;
-    const errors = [];
-    allEndpoints.forEach((ep, i) => {
-      // stagger: direct endpoints immediately, proxies after 3s so they only kick in if direct is slow
-      const delay = i < 2 ? 0 : 3000;
-      setTimeout(() => {
-        if (settled) return;
-        tryEndpoint(ep).then(items => {
-          if (!settled) { settled = true; resolve(items); }
-        }).catch(err => {
-          errors.push(err);
-          remaining--;
-          if (!settled && remaining === 0) reject(errors[0] || new Error('All endpoints failed'));
-        });
-      }, delay);
-    });
-  });
+  // Race all direct endpoints; first valid response wins
+  try {
+    return await Promise.any(OVERPASS_ENDPOINTS.map(ep =>
+      fetch(ep, { ...postOpts, signal: AbortSignal.timeout(20000) }).then(parse)
+    ));
+  } catch (_) {}
+
+  // Fallback: CORS proxies (GET request to first endpoint)
+  const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
+  const proxies = [
+    'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl),
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl),
+  ];
+  try {
+    return await Promise.any(proxies.map(url =>
+      fetch(url, { signal: AbortSignal.timeout(20000) }).then(parse)
+    ));
+  } catch (e) {
+    throw new Error('Search failed — Overpass API unreachable. Try again in a moment.');
+  }
 }
 
 function osmToItem(el, cLat, cLng) {
