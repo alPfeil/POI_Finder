@@ -177,6 +177,18 @@
     .btn-outline { padding: 0.45rem 1rem; border: 1.5px solid var(--border); background: transparent; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: border-color 0.15s; }
     .btn-outline:hover { border-color: #999; }
     .sync-indicator { font-size: 0.72rem; opacity: 0.8; }
+    /* Collapsible controls */
+    .controls-summary { display: none; flex: 1; align-items: center; gap: 0.5rem; font-size: 0.85rem; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .controls-summary .summary-text { overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: 0.83rem; }
+    .controls-summary .summary-text strong { color: var(--komoot); }
+    .controls-toggle { margin-left: auto; flex-shrink: 0; padding: 0.3rem 0.7rem; background: var(--bg); border: 1.5px solid var(--border); border-radius: 6px; font-size: 0.8rem; cursor: pointer; transition: border-color 0.15s; color: var(--text); }
+    .controls-toggle:hover { border-color: var(--komoot); }
+    .controls.collapsed { padding: 0.45rem 1.25rem; flex-wrap: nowrap; }
+    .controls.collapsed > .cg,
+    .controls.collapsed > .btn-search,
+    .controls.collapsed > .btn-locate { display: none; }
+    .controls.collapsed .controls-summary { display: flex; }
+
     @media (max-width: 520px) {
       .cg input[type="number"] { width: 78px; }
       .poi-grid { grid-template-columns: 1fr; }
@@ -239,6 +251,10 @@
     </div>
     <button class="btn-locate" id="locate-btn">&#128205; My Location</button>
     <button class="btn-search" id="search-btn">Search</button>
+    <div class="controls-summary" id="controls-summary">
+      <span class="summary-text" id="controls-summary-text"></span>
+      <button class="controls-toggle" id="controls-toggle">&#9998; Edit</button>
+    </div>
   </div>
 
   <!-- Stats bar -->
@@ -250,7 +266,7 @@
       <button data-val="unvisited">Unvisited</button>
       <button data-val="visited">Visited</button>
     </div>
-    <label><input type="checkbox" id="hide-unnamed" checked /> Hide unnamed</label>
+    <label><input type="checkbox" id="hide-unnamed" /> Hide unnamed viewpoints</label>
     <div class="type-filter-wrap" id="type-filter-wrap">
       <button class="type-filter-btn" id="type-filter-btn">&#127919; Types</button>
       <div class="type-filter-dropdown" id="type-filter-dropdown"></div>
@@ -321,8 +337,7 @@ const OVERPASS_ENDPOINTS = [
 ];
 const OSM_FILTERS = [
   ['natural','peak'], ['natural','volcano'], ['natural','waterfall'],
-  ['natural','spring'], ['natural','cave_entrance'], ['natural','arch'],
-  ['natural','rock'], ['natural','tree'],
+  ['natural','spring'], ['natural','cave_entrance'],
   ['tourism','viewpoint'], ['tourism','attraction'], ['tourism','artwork'],
   ['historic','ruins'], ['historic','castle'], ['historic','monument'],
   ['historic','memorial'], ['historic','archaeological_site'],
@@ -330,14 +345,27 @@ const OSM_FILTERS = [
 ];
 const OSM_TYPE_MAP = {
   peak:'summit', volcano:'summit', waterfall:'waterfall', spring:'spring',
-  cave_entrance:'cave', arch:'natural_feature', rock:'natural_feature',
-  tree:'natural_feature', viewpoint:'viewpoint', attraction:'attraction',
-  artwork:'artwork', ruins:'historic', castle:'historic', monument:'historic',
+  cave_entrance:'cave',
+  viewpoint:'viewpoint', attraction:'attraction', artwork:'artwork',
+  ruins:'historic', castle:'historic', monument:'historic',
   memorial:'historic', archaeological_site:'historic',
   nature_reserve:'nature_reserve', shelter:'shelter',
 };
-const ALL_TYPES = ['summit','waterfall','viewpoint','spring','cave','natural_feature',
-  'historic','attraction','artwork','nature_reserve','shelter','poi'];
+const ALL_TYPES = ['summit','waterfall','spring','cave','viewpoint','attraction','artwork','historic','nature_reserve','shelter'];
+
+// OSM clauses to fetch for each app-type. ["name"] applied where unnamed results are noise.
+const TYPE_QUERIES = {
+  summit:         ar => `node["natural"~"peak|volcano"]${ar};`,
+  waterfall:      ar => `node["natural"="waterfall"]["name"]${ar};`,
+  spring:         ar => `node["natural"="spring"]["name"]${ar};`,
+  cave:           ar => `node["natural"="cave_entrance"]["name"]${ar};`,
+  viewpoint:      ar => `node["tourism"="viewpoint"]${ar};`,
+  attraction:     ar => `node["tourism"="attraction"]["name"]${ar};`,
+  artwork:        ar => `node["tourism"="artwork"]["name"]${ar};`,
+  historic:       ar => `node["historic"~"ruins|castle|monument|memorial|archaeological_site"]["name"]${ar};`,
+  nature_reserve: ar => `node["leisure"="nature_reserve"]["name"]${ar};`,
+  shelter:        ar => `node["amenity"="shelter"]["name"]${ar};`,
+};
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -529,7 +557,7 @@ function buildTypeDropdown() {
     cb.type = 'checkbox'; cb.value = t; cb.checked = true;
     cb.addEventListener('change', () => {
       if (cb.checked) activeTypes.delete(t); else activeTypes.add(t);
-      updateTypeFilterBtn(); renderList();
+      updateTypeFilterBtn(); doSearch();
     });
     lbl.append(cb, typeIcon(t) + ' ' + typeLabel(t));
     dd.appendChild(lbl);
@@ -540,13 +568,13 @@ function buildTypeDropdown() {
   allBtn.addEventListener('click', () => {
     activeTypes.clear();
     dd.querySelectorAll('input[type="checkbox"]').forEach(c => c.checked = true);
-    updateTypeFilterBtn(); renderList();
+    updateTypeFilterBtn(); doSearch();
   });
   const noneBtn = document.createElement('button'); noneBtn.textContent = 'None';
   noneBtn.addEventListener('click', () => {
     ALL_TYPES.forEach(t => activeTypes.add(t));
     dd.querySelectorAll('input[type="checkbox"]').forEach(c => c.checked = false);
-    updateTypeFilterBtn(); renderList();
+    updateTypeFilterBtn();
   });
   actions.append(allBtn, noneBtn); dd.appendChild(actions);
 }
@@ -748,6 +776,23 @@ $('locate-btn').addEventListener('click', () => {
   );
 });
 
+// ── Collapsible controls ──────────────────────────────────────────────────────
+function collapseControls() {
+  const lat  = $('lat-input').value;
+  const lng  = $('lng-input').value;
+  const place = $('place-input').value.split(',')[0].trim();
+  const radius = $('radius-input').value;
+  const loc  = place || (lat && lng ? `${parseFloat(lat).toFixed(3)}, ${parseFloat(lng).toFixed(3)}` : '');
+  $('controls-summary-text').innerHTML = loc
+    ? `<strong>${esc(loc)}</strong> &nbsp;·&nbsp; ${radius} km radius`
+    : `${radius} km radius`;
+  document.querySelector('.controls').classList.add('collapsed');
+}
+function expandControls() {
+  document.querySelector('.controls').classList.remove('collapsed');
+}
+$('controls-toggle').addEventListener('click', expandControls);
+
 // ── Search ────────────────────────────────────────────────────────────────────
 $('search-btn').addEventListener('click', doSearch);
 $('hide-unnamed').addEventListener('change', renderList);
@@ -768,6 +813,7 @@ async function doSearch() {
   try {
     allItems = await fetchOsmPoi(lat, lng, radius, limit);
     renderList();
+    collapseControls();
   } catch (err) {
     showError('Search failed', err.message);
   } finally {
@@ -800,7 +846,10 @@ async function doGeocode() {
 // ── Overpass / OSM ────────────────────────────────────────────────────────────
 async function fetchOsmPoi(lat, lng, radius, limit = 50) {
   const ar = `(around:${radius},${lat},${lng})`;
-  const query = `[out:json][timeout:25];\n(\n  node["natural"~"peak|volcano|waterfall|spring|cave_entrance|arch|rock|tree"]${ar};\n  node["tourism"~"viewpoint|attraction|artwork"]${ar};\n  node["historic"~"ruins|castle|monument|memorial|archaeological_site"]${ar};\n  node["leisure"="nature_reserve"]${ar};\n  node["amenity"="shelter"]${ar};\n);\nout body ${limit};`;
+  const enabledTypes = ALL_TYPES.filter(t => !activeTypes.has(t));
+  if (enabledTypes.length === 0) { return []; }
+  const clauses = enabledTypes.map(t => '  ' + TYPE_QUERIES[t](ar)).join('\n');
+  const query = `[out:json][timeout:25];\n(\n${clauses}\n);\nout body ${limit};`;
 
   for (const ep of OVERPASS_ENDPOINTS) {
     try {
@@ -1062,14 +1111,14 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function typeLabel(t) {
-  return ({summit:'Summit',waterfall:'Waterfall',viewpoint:'Viewpoint',spring:'Spring',
-    cave:'Cave',natural_feature:'Natural Feature',historic:'Historic',attraction:'Attraction',
-    artwork:'Artwork',nature_reserve:'Nature Reserve',shelter:'Shelter',poi:'POI'})[t]
+  return ({summit:'Summit',waterfall:'Waterfall',spring:'Spring',cave:'Cave',
+    viewpoint:'Viewpoint',attraction:'Attraction',artwork:'Artwork',historic:'Historic',
+    nature_reserve:'Nature Reserve',shelter:'Shelter',poi:'POI'})[t]
     || (t||'POI').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
 }
 function typeIcon(t) {
-  return ({summit:'🏔️',waterfall:'💧',viewpoint:'👁️',spring:'🌊',cave:'🕳️',
-    natural_feature:'🌿',historic:'🏛️',attraction:'⭐',artwork:'🎨',
+  return ({summit:'🏔️',waterfall:'💧',spring:'🌊',cave:'🕳️',
+    viewpoint:'👁️',attraction:'⭐',artwork:'🎨',historic:'🏛️',
     nature_reserve:'🌲',shelter:'🏕️',poi:'📍'})[t] || '📍';
 }
 </script>
