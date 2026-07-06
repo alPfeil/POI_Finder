@@ -851,27 +851,42 @@ async function fetchOsmPoi(lat, lng, radius, limit = 50) {
   const clauses = enabledTypes.map(t => '  ' + TYPE_QUERIES[t](ar)).join('\n');
   const query = `[out:json][timeout:25];\n(\n${clauses}\n);\nout body ${limit};`;
 
-  for (const ep of OVERPASS_ENDPOINTS) {
-    try {
-      const res = await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query), signal: AbortSignal.timeout(30000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data.elements) return data.elements.map(el => osmToItem(el, lat, lng));
-    } catch (_) {}
-  }
   const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
-  const proxies = ['https://corsproxy.io/?url=' + encodeURIComponent(targetUrl), 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl)];
-  let lastErr;
-  for (const url of proxies) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-      if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
-      const data = await res.json();
-      if (data.elements) return data.elements.map(el => osmToItem(el, lat, lng));
-      lastErr = new Error('Unexpected response format');
-    } catch (e) { lastErr = e.name === 'TimeoutError' ? new Error('Request timed out') : e; }
-  }
-  throw lastErr || new Error('All Overpass endpoints failed');
+  const allEndpoints = [
+    { method: 'POST', url: OVERPASS_ENDPOINTS[0], body: 'data=' + encodeURIComponent(query) },
+    { method: 'POST', url: OVERPASS_ENDPOINTS[1], body: 'data=' + encodeURIComponent(query) },
+    { method: 'GET',  url: 'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl) },
+    { method: 'GET',  url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl) },
+  ];
+
+  const tryEndpoint = async ({ method, url, body }) => {
+    const opts = { method, signal: AbortSignal.timeout(18000) };
+    if (body) { opts.headers = { 'Content-Type': 'application/x-www-form-urlencoded' }; opts.body = body; }
+    const res = await fetch(url, opts);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.elements) throw new Error('Unexpected response format');
+    return data.elements.map(el => osmToItem(el, lat, lng));
+  };
+
+  return new Promise((resolve, reject) => {
+    let settled = false, remaining = allEndpoints.length;
+    const errors = [];
+    allEndpoints.forEach((ep, i) => {
+      // stagger: direct endpoints immediately, proxies after 3s so they only kick in if direct is slow
+      const delay = i < 2 ? 0 : 3000;
+      setTimeout(() => {
+        if (settled) return;
+        tryEndpoint(ep).then(items => {
+          if (!settled) { settled = true; resolve(items); }
+        }).catch(err => {
+          errors.push(err);
+          remaining--;
+          if (!settled && remaining === 0) reject(errors[0] || new Error('All endpoints failed'));
+        });
+      }, delay);
+    });
+  });
 }
 
 function osmToItem(el, cLat, cLng) {
