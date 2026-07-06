@@ -194,6 +194,21 @@
       .poi-grid { grid-template-columns: 1fr; }
       #map-pane.split { flex: 0 0 50%; }
     }
+
+    /* Cache area UI */
+    .cache-status-chip { font-size: 0.72rem; opacity: 0.85; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cache-status-chip.stale { color: #ffe082; }
+    #cache-progress-bar { background: #e8f4e8; border-bottom: 1px solid #c8e8c8; padding: 0.5rem 1.25rem; display: none; flex-shrink: 0; }
+    #cache-progress-bar.visible { display: block; }
+    #cache-progress-bar .cpb-label { font-size: 0.8rem; color: #2a5c2a; margin-bottom: 0.35rem; }
+    #cache-progress-bar .cpb-track { background: #c8e8c8; border-radius: 4px; height: 6px; }
+    #cache-progress-bar .cpb-fill { background: var(--komoot); height: 6px; border-radius: 4px; transition: width 0.3s; width: 0%; }
+    #outside-cache-banner { background: #fff8e1; border-bottom: 2px solid #ffe082; padding: 0.5rem 1.25rem; display: none; flex-shrink: 0; align-items: center; gap: 0.75rem; font-size: 0.82rem; color: #7a5c00; }
+    #outside-cache-banner.visible { display: flex; }
+    #outside-cache-banner strong { font-weight: 700; }
+    #btn-refresh-cache { background: #f5a623; color: #fff; border: none; border-radius: 6px; padding: 0.3rem 0.85rem; font-size: 0.8rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+    #btn-refresh-cache:hover { background: #e0961e; }
+    #btn-dismiss-banner { margin-left: auto; background: transparent; border: none; color: #7a5c00; cursor: pointer; font-size: 1rem; padding: 0 0.2rem; }
   </style>
 </head>
 <body>
@@ -203,6 +218,8 @@
     <h1>&#127748; POI Explorer</h1>
     <div class="header-right">
       <span class="sync-indicator" id="sync-indicator"></span>
+      <span class="cache-status-chip" id="cache-status-chip" title="Offline cache status"></span>
+      <button class="btn-small" id="cache-btn" title="Download POIs around current location for offline use">&#8659; Cache Area</button>
       <button class="btn-small" id="gist-btn" title="Sync with GitHub Gist">&#128279; Sync</button>
     </div>
   </header>
@@ -259,6 +276,19 @@
 
   <!-- Stats bar -->
   <div id="stats-bar"></div>
+
+  <!-- Cache progress bar -->
+  <div id="cache-progress-bar">
+    <div class="cpb-label" id="cache-progress-label">Downloading cache…</div>
+    <div class="cpb-track"><div class="cpb-fill" id="cache-progress-fill"></div></div>
+  </div>
+
+  <!-- Outside-cache banner -->
+  <div id="outside-cache-banner">
+    <strong>&#128205; Outside cached area</strong> &mdash; results come from live Overpass API.
+    <button id="btn-refresh-cache">&#8659; Cache here</button>
+    <button id="btn-dismiss-banner" title="Dismiss">&#10005;</button>
+  </div>
 
   <div class="filter-bar">
     <div class="visited-toggle" id="visited-toggle">
@@ -331,6 +361,9 @@ const NOTES_KEY        = 'komoot_poi_notes_v1';
 const DATES_KEY        = 'komoot_poi_dates_v1';
 const POI_CACHE_KEY    = 'komoot_poi_cache_v1';
 const SEARCH_KEY       = 'komoot_poi_search_v1';
+const CACHE_META_KEY   = 'komoot_area_cache_meta_v1';
+const CACHE_TTL_MS     = 30 * 24 * 60 * 60 * 1000; // 30 days
+const CACHE_RADIUS_M   = 50000; // 50 km default cache radius
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -368,6 +401,198 @@ const TYPE_QUERIES = {
   nature_reserve: ar => `node["leisure"="nature_reserve"]["name"]${ar};`,
   shelter:        ar => `node["amenity"="shelter"]["name"]${ar};`,
 };
+
+// ── IndexedDB area cache ──────────────────────────────────────────────────────
+let idb = null;
+const IDB_NAME    = 'poi-area-cache';
+const IDB_VERSION = 1;
+const IDB_STORE   = 'pois';
+
+function openIdb() {
+  if (idb) return Promise.resolve(idb);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        const store = db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+        store.createIndex('type', 'type', { unique: false });
+      }
+    };
+    req.onsuccess  = e => { idb = e.target.result; resolve(idb); };
+    req.onerror    = () => reject(req.error);
+  });
+}
+
+function idbPutAll(items) {
+  return openIdb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const st = tx.objectStore(IDB_STORE);
+    items.forEach(item => st.put(item));
+    tx.oncomplete = resolve;
+    tx.onerror    = () => reject(tx.error);
+  }));
+}
+
+function idbClear() {
+  return openIdb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).clear();
+    tx.oncomplete = resolve;
+    tx.onerror    = () => reject(tx.error);
+  }));
+}
+
+function idbQueryRadius(lat, lng, radius) {
+  return openIdb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).getAll();
+    req.onsuccess = () => {
+      const all = req.result || [];
+      // Re-compute distance from the new search centre, filter to radius
+      const within = all
+        .map(p => ({ ...p, distance_m: haversine(lat, lng, p.lat, p.lng) }))
+        .filter(p => p.distance_m <= radius);
+      resolve(within);
+    };
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+// ── Cache metadata (localStorage, tiny) ──────────────────────────────────────
+function loadCacheMeta() {
+  try { return JSON.parse(localStorage.getItem(CACHE_META_KEY)) || null; } catch { return null; }
+}
+function saveCacheMeta(meta) {
+  localStorage.setItem(CACHE_META_KEY, JSON.stringify(meta));
+}
+function clearCacheMeta() {
+  localStorage.removeItem(CACHE_META_KEY);
+}
+
+let cacheMeta = loadCacheMeta(); // { lat, lng, radius, ts, count }
+let cacheCircleLayer = null;
+let bannerDismissed = false;
+
+function isCacheValid() {
+  return cacheMeta && (Date.now() - cacheMeta.ts) < CACHE_TTL_MS;
+}
+
+function isInsideCache(lat, lng) {
+  if (!isCacheValid()) return false;
+  return haversine(lat, lng, cacheMeta.lat, cacheMeta.lng) + 0 <= cacheMeta.radius;
+}
+
+function updateCacheChip() {
+  const chip = $('cache-status-chip');
+  if (!cacheMeta) { chip.textContent = ''; return; }
+  const ageDays = Math.floor((Date.now() - cacheMeta.ts) / 86400000);
+  const valid = isCacheValid();
+  const ageStr = ageDays === 0 ? 'today' : ageDays === 1 ? '1d ago' : ageDays + 'd ago';
+  chip.textContent = valid
+    ? `&#128190; ${(cacheMeta.count || '?')} POIs · ${ageStr}`
+    : `&#9888;&#65039; Cache expired`;
+  chip.className = 'cache-status-chip' + (valid ? '' : ' stale');
+  chip.innerHTML = chip.textContent; // allow HTML entities
+}
+
+function drawCacheCircle() {
+  if (!leafletMap) return;
+  if (cacheCircleLayer) { cacheCircleLayer.remove(); cacheCircleLayer = null; }
+  if (!isCacheValid()) return;
+  cacheCircleLayer = L.circle([cacheMeta.lat, cacheMeta.lng], {
+    radius: cacheMeta.radius,
+    color: '#6db33f', weight: 1.5, opacity: 0.5,
+    fillColor: '#6db33f', fillOpacity: 0.06,
+    dashArray: '6 4', interactive: false,
+  }).addTo(leafletMap);
+}
+
+function checkOutsideBanner(lat, lng) {
+  if (bannerDismissed) return;
+  const banner = $('outside-cache-banner');
+  if (!isInsideCache(lat, lng)) {
+    banner.classList.add('visible');
+  } else {
+    banner.classList.remove('visible');
+  }
+}
+
+// ── Cache download ────────────────────────────────────────────────────────────
+async function downloadCacheArea(lat, lng) {
+  const radius = CACHE_RADIUS_M;
+  const progressBar  = $('cache-progress-bar');
+  const progressFill = $('cache-progress-fill');
+  const progressLabel = $('cache-progress-label');
+
+  progressBar.classList.add('visible');
+  progressFill.style.width = '0%';
+  $('cache-btn').disabled = true;
+  bannerDismissed = false;
+  $('outside-cache-banner').classList.remove('visible');
+
+  const types = ALL_TYPES;
+  const ar = `(around:${radius},${lat},${lng})`;
+  let allPois = [];
+  let failed = 0;
+
+  for (let i = 0; i < types.length; i++) {
+    const t = types[i];
+    progressLabel.textContent = `Downloading ${typeIcon(t)} ${typeLabel(t)} (${i + 1}/${types.length})…`;
+    progressFill.style.width = ((i / types.length) * 100) + '%';
+
+    const query = `[out:json][timeout:60];\n(\n  ${TYPE_QUERIES[t](ar)}\n);\nout body 5000;`;
+    const postOpts = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'data=' + encodeURIComponent(query),
+    };
+    const parse = async res => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const d = await res.json();
+      return (d.elements || []).map(el => osmToItem(el, lat, lng));
+    };
+
+    try {
+      let items;
+      try {
+        items = await Promise.any(OVERPASS_ENDPOINTS.map(ep =>
+          fetch(ep, { ...postOpts, signal: AbortSignal.timeout(55000) }).then(parse)
+        ));
+      } catch {
+        const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
+        const proxies = [
+          'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl),
+          'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl),
+        ];
+        items = await Promise.any(proxies.map(u =>
+          fetch(u, { signal: AbortSignal.timeout(55000) }).then(parse)
+        ));
+      }
+      allPois = allPois.concat(items);
+    } catch {
+      failed++;
+    }
+  }
+
+  progressFill.style.width = '100%';
+  progressLabel.textContent = `Saving ${allPois.length} POIs…`;
+
+  await idbClear();
+  if (allPois.length > 0) await idbPutAll(allPois);
+
+  cacheMeta = { lat, lng, radius, ts: Date.now(), count: allPois.length };
+  saveCacheMeta(cacheMeta);
+  updateCacheChip();
+  drawCacheCircle();
+
+  progressBar.classList.remove('visible');
+  $('cache-btn').disabled = false;
+
+  if (failed > 0) {
+    alert(`Cache download complete with ${failed} category error(s). ${allPois.length} POIs stored.`);
+  }
+}
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -627,14 +852,14 @@ function setView(v) {
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 function initMap() {
-  if (leafletMap) { setTimeout(() => leafletMap.invalidateSize(), 50); return; }
+  if (leafletMap) { setTimeout(() => leafletMap.invalidateSize(), 50); drawCacheCircle(); return; }
   leafletMap = L.map('the-map', { zoomControl: true });
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 19,
   }).addTo(leafletMap);
   leafletMap.setView([48.137, 11.576], 12);
-  setTimeout(() => leafletMap.invalidateSize(), 100);
+  setTimeout(() => { leafletMap.invalidateSize(); drawCacheCircle(); }, 100);
 }
 
 function syncMapMarkers(items) {
@@ -809,9 +1034,10 @@ async function doSearch() {
   const limit = parseInt($('limit-input').value) || 50;
   if (isNaN(lat) || isNaN(lng)) { alert('Please enter a location or tap My Location.'); return; }
   saveSearchState();
+  checkOutsideBanner(lat, lng);
   const btn = $('search-btn');
   btn.disabled = true; btn.textContent = 'Searching…';
-  showLoading('Querying OpenStreetMap…');
+  showLoading('Querying…');
   try {
     allItems = await fetchOsmPoi(lat, lng, radius, limit);
     renderList();
@@ -847,6 +1073,17 @@ async function doGeocode() {
 
 // ── Overpass / OSM ────────────────────────────────────────────────────────────
 async function fetchOsmPoi(lat, lng, radius, limit = 50) {
+  // Cache-first: if the search centre is inside the cached area, query IndexedDB
+  if (isInsideCache(lat, lng)) {
+    try {
+      const cached = await idbQueryRadius(lat, lng, radius);
+      const enabledTypes = ALL_TYPES.filter(t => !activeTypes.has(t));
+      const filtered = cached.filter(p => enabledTypes.includes(p.type));
+      filtered.sort((a, b) => a.distance_m - b.distance_m);
+      return filtered.slice(0, limit);
+    } catch { /* fall through to live */ }
+  }
+
   const ar = `(around:${radius},${lat},${lng})`;
   const enabledTypes = ALL_TYPES.filter(t => !activeTypes.has(t));
   if (enabledTypes.length === 0) { return []; }
@@ -1130,6 +1367,38 @@ function typeIcon(t) {
     viewpoint:'👁️',attraction:'⭐',artwork:'🎨',historic:'🏛️',
     nature_reserve:'🌲',shelter:'🏕️',poi:'📍'})[t] || '📍';
 }
+
+// ── Cache area event wiring ───────────────────────────────────────────────────
+$('cache-btn').addEventListener('click', () => {
+  navigator.geolocation.getCurrentPosition(
+    async pos => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      await downloadCacheArea(lat, lng);
+    },
+    err => alert('Could not get location: ' + err.message),
+    { timeout: 10000 }
+  );
+});
+
+$('btn-refresh-cache').addEventListener('click', () => {
+  $('outside-cache-banner').classList.remove('visible');
+  navigator.geolocation.getCurrentPosition(
+    async pos => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      await downloadCacheArea(lat, lng);
+    },
+    err => alert('Could not get location: ' + err.message),
+    { timeout: 10000 }
+  );
+});
+
+$('btn-dismiss-banner').addEventListener('click', () => {
+  bannerDismissed = true;
+  $('outside-cache-banner').classList.remove('visible');
+});
+
+// Init cache chip on load
+updateCacheChip();
 </script>
 </body>
 </html>
