@@ -332,6 +332,35 @@
   </div>
 </div>
 
+<!-- CACHE RADIUS PANEL -->
+<div id="cache-panel" style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:none;align-items:center;justify-content:center;z-index:1000;padding:1rem;">
+  <div class="gist-card" style="max-width:340px;">
+    <h2>&#8659; Cache Area</h2>
+    <p class="hint">Download all POIs within a radius for offline use.</p>
+    <div id="cache-loc-row" style="display:none;margin-bottom:1rem;">
+      <div style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.4rem;">Location</div>
+      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;margin-bottom:0.3rem;">
+        <input type="radio" name="cache-loc" id="cache-loc-search" style="accent-color:var(--komoot);" />
+        <span id="cache-loc-search-label">Search location</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
+        <input type="radio" name="cache-loc" id="cache-loc-gps" style="accent-color:var(--komoot);" />
+        My GPS location
+      </label>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:1rem;">
+      <label style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;">Radius (km)</label>
+      <input type="number" id="cache-radius-input" value="10" min="1" max="100" step="1"
+        style="padding:0.5rem 0.75rem;border:1.5px solid var(--border);border-radius:6px;font-size:0.95rem;outline:none;width:120px;" />
+      <span style="font-size:0.72rem;color:var(--muted);">Larger radius = longer download time</span>
+    </div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+      <button class="btn-outline" id="cache-panel-cancel">Cancel</button>
+      <button class="btn-search" id="cache-panel-start" style="padding:0.45rem 1.25rem;">Download</button>
+    </div>
+  </div>
+</div>
+
 <!-- GIST SYNC PANEL -->
 <div id="gist-panel">
   <div class="gist-card">
@@ -363,7 +392,7 @@ const POI_CACHE_KEY    = 'komoot_poi_cache_v1';
 const SEARCH_KEY       = 'komoot_poi_search_v1';
 const CACHE_AREAS_KEY  = 'komoot_area_cache_areas_v1';
 const CACHE_TTL_MS     = 30 * 24 * 60 * 60 * 1000; // 30 days
-const CACHE_RADIUS_M   = 50000; // 50 km default cache radius
+const CACHE_RADIUS_M   = 10000; // 10 km default cache radius
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -566,8 +595,7 @@ function checkOutsideBanner(lat, lng) {
 }
 
 // ── Cache download ────────────────────────────────────────────────────────────
-async function downloadCacheArea(lat, lng) {
-  const radius = CACHE_RADIUS_M;
+async function downloadCacheArea(lat, lng, radius = CACHE_RADIUS_M) {
   const progressBar   = $('cache-progress-bar');
   const progressFill  = $('cache-progress-fill');
   const progressLabel = $('cache-progress-label');
@@ -1437,27 +1465,56 @@ function typeIcon(t) {
 }
 
 // ── Cache area event wiring ───────────────────────────────────────────────────
+function openCachePanel(onConfirm) {
+  $('cache-radius-input').value = Math.round(CACHE_RADIUS_M / 1000);
+
+  // Show location source options if search coords are already filled in
+  const searchLat = parseFloat($('lat-input').value);
+  const searchLng = parseFloat($('lng-input').value);
+  const hasSearchLoc = !isNaN(searchLat) && !isNaN(searchLng);
+  const locRow = $('cache-loc-row');
+  if (hasSearchLoc) {
+    const place = $('place-input').value.split(',')[0].trim();
+    const label = place || `${searchLat.toFixed(3)}, ${searchLng.toFixed(3)}`;
+    $('cache-loc-search-label').textContent = `Search location (${label})`;
+    locRow.style.display = '';
+    $('cache-loc-search').checked = true;
+  } else {
+    locRow.style.display = 'none';
+    $('cache-loc-gps').checked = true;
+  }
+
+  const panel = $('cache-panel');
+  panel.style.display = 'flex';
+  const start = $('cache-panel-start');
+  const cancel = $('cache-panel-cancel');
+  const close = () => { panel.style.display = 'none'; start.onclick = null; cancel.onclick = null; };
+
+  start.onclick = () => {
+    close();
+    const radiusM = Math.max(1, parseInt($('cache-radius-input').value) || 10) * 1000;
+    const useSearch = hasSearchLoc && $('cache-loc-search').checked;
+    if (useSearch) {
+      onConfirm(searchLat, searchLng, radiusM);
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        pos => onConfirm(pos.coords.latitude, pos.coords.longitude, radiusM),
+        err => alert('Could not get location: ' + err.message),
+        { timeout: 10000 }
+      );
+    }
+  };
+  cancel.onclick = close;
+  panel.onclick = e => { if (e.target === panel) close(); };
+}
+
 $('cache-btn').addEventListener('click', () => {
-  navigator.geolocation.getCurrentPosition(
-    async pos => {
-      const { latitude: lat, longitude: lng } = pos.coords;
-      await downloadCacheArea(lat, lng);
-    },
-    err => alert('Could not get location: ' + err.message),
-    { timeout: 10000 }
-  );
+  openCachePanel((lat, lng, radiusM) => downloadCacheArea(lat, lng, radiusM));
 });
 
 $('btn-refresh-cache').addEventListener('click', () => {
   $('outside-cache-banner').classList.remove('visible');
-  navigator.geolocation.getCurrentPosition(
-    async pos => {
-      const { latitude: lat, longitude: lng } = pos.coords;
-      await downloadCacheArea(lat, lng);
-    },
-    err => alert('Could not get location: ' + err.message),
-    { timeout: 10000 }
-  );
+  openCachePanel((lat, lng, radiusM) => downloadCacheArea(lat, lng, radiusM));
 });
 
 $('btn-dismiss-banner').addEventListener('click', () => {
