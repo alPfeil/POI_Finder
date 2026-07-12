@@ -371,35 +371,85 @@ const OVERPASS_ENDPOINTS = [
   'https://overpass.openstreetmap.ru/api/interpreter',
 ];
 const OSM_FILTERS = [
-  ['natural','peak'], ['natural','volcano'], ['natural','waterfall'],
-  ['natural','spring'], ['natural','cave_entrance'],
+  ['natural','peak'], ['natural','volcano'], ['waterway','waterfall'],
+  ['natural','spring'], ['natural','hot_spring'], ['natural','cave_entrance'],
+  ['natural','saddle'], ['natural','arch'], ['natural','geyser'], ['natural','glacier'],
+  ['natural','cliff'],
   ['tourism','viewpoint'], ['tourism','attraction'], ['tourism','artwork'],
-  ['historic','ruins'], ['historic','castle'], ['historic','monument'],
-  ['historic','memorial'], ['historic','archaeological_site'],
-  ['leisure','nature_reserve'], ['amenity','shelter'],
+  ['tourism','museum'], ['tourism','alpine_hut'], ['tourism','wilderness_hut'],
+  ['tourism','camp_site'], ['tourism','picnic_site'], ['tourism','theme_park'],
+  ['historic','ruins'], ['historic','castle'], ['historic','fort'], ['historic','monument'],
+  ['historic','memorial'], ['historic','archaeological_site'], ['historic','battlefield'],
+  ['historic','mine'], ['historic','wayside_shrine'], ['historic','city_gate'],
+  ['historic','tomb'], ['historic','abbey'], ['historic','manor'], ['historic','lighthouse'],
+  ['historic','tumulus'], ['historic','stone_circle'], ['historic','menhir'],
+  ['man_made','lighthouse'], ['man_made','windmill'], ['man_made','watermill'], ['man_made','tower'],
+  ['man_made','cairn'],
+  ['leisure','nature_reserve'], ['leisure','park'], ['leisure','garden'],
+  ['leisure','bird_hide'], ['leisure','wildlife_hide'],
+  ['amenity','shelter'], ['amenity','fountain'], ['amenity','place_of_worship'],
+  ['tourism','zoo'],
 ];
 const OSM_TYPE_MAP = {
-  peak:'summit', volcano:'summit', waterfall:'waterfall', spring:'spring',
+  peak:'summit', volcano:'summit',
+  waterfall:'waterfall',
+  spring:'spring', hot_spring:'spring',
   cave_entrance:'cave',
+  saddle:'saddle', arch:'arch', geyser:'geyser', glacier:'glacier', cliff:'cliff',
   viewpoint:'viewpoint', attraction:'attraction', artwork:'artwork',
-  ruins:'historic', castle:'historic', monument:'historic',
-  memorial:'historic', archaeological_site:'historic',
-  nature_reserve:'nature_reserve', shelter:'shelter',
+  museum:'museum', alpine_hut:'alpine_hut', wilderness_hut:'wilderness_hut',
+  camp_site:'camp', picnic_site:'picnic', theme_park:'theme_park',
+  ruins:'historic', castle:'historic', fort:'historic', monument:'historic',
+  memorial:'historic', archaeological_site:'historic', battlefield:'historic',
+  mine:'historic', wayside_shrine:'historic', city_gate:'historic',
+  tomb:'historic', abbey:'historic', manor:'historic',
+  tumulus:'prehistoric', stone_circle:'prehistoric', menhir:'prehistoric',
+  lighthouse:'lighthouse', windmill:'tower', watermill:'tower', tower:'tower',
+  cairn:'cairn',
+  nature_reserve:'nature_reserve', park:'park', garden:'garden',
+  bird_hide:'wildlife_hide', wildlife_hide:'wildlife_hide',
+  shelter:'shelter', fountain:'fountain', place_of_worship:'church', zoo:'zoo',
 };
-const ALL_TYPES = ['summit','waterfall','spring','cave','viewpoint','attraction','artwork','historic','nature_reserve','shelter'];
+const ALL_TYPES = [
+  'summit','saddle','waterfall','spring','geyser','cave','arch','glacier','cliff',
+  'viewpoint','attraction','artwork','museum','alpine_hut','wilderness_hut',
+  'historic','prehistoric','lighthouse','tower','cairn',
+  'nature_reserve','park','garden','wildlife_hide',
+  'shelter','camp','picnic','fountain','church','zoo','theme_park',
+];
 
-// OSM clauses to fetch for each app-type. ["name"] applied where unnamed results are noise.
 const TYPE_QUERIES = {
   summit:         ar => `node["natural"~"peak|volcano"]${ar};`,
-  waterfall:      ar => `node["natural"="waterfall"]["name"]${ar};`,
-  spring:         ar => `node["natural"="spring"]["name"]${ar};`,
+  saddle:         ar => `node["natural"="saddle"]["name"]${ar};`,
+  waterfall:      ar => `node["waterway"="waterfall"]["name"]${ar};\n  way["waterway"="waterfall"]["name"]${ar};`,
+  spring:         ar => `node["natural"~"spring|hot_spring"]["name"]${ar};`,
+  geyser:         ar => `node["natural"="geyser"]${ar};`,
   cave:           ar => `node["natural"="cave_entrance"]["name"]${ar};`,
+  arch:           ar => `node["natural"="arch"]["name"]${ar};\n  way["natural"="arch"]["name"]${ar};`,
+  glacier:        ar => `node["natural"="glacier"]["name"]${ar};\n  way["natural"="glacier"]["name"]${ar};\n  relation["natural"="glacier"]["name"]${ar};`,
+  cliff:          ar => `way["natural"="cliff"]["name"]${ar};\n  node["natural"="cliff"]["name"]${ar};`,
   viewpoint:      ar => `node["tourism"="viewpoint"]${ar};`,
-  attraction:     ar => `node["tourism"="attraction"]["name"]${ar};`,
-  artwork:        ar => `node["tourism"="artwork"]["name"]${ar};`,
-  historic:       ar => `node["historic"~"ruins|castle|monument|memorial|archaeological_site"]["name"]${ar};`,
-  nature_reserve: ar => `node["leisure"="nature_reserve"]["name"]${ar};`,
+  attraction:     ar => `node["tourism"="attraction"]["name"]${ar};\n  way["tourism"="attraction"]["name"]${ar};\n  relation["tourism"="attraction"]["name"]${ar};`,
+  artwork:        ar => `node["tourism"="artwork"]["name"]${ar};\n  way["tourism"="artwork"]["name"]${ar};`,
+  museum:         ar => `node["tourism"="museum"]["name"]${ar};\n  way["tourism"="museum"]["name"]${ar};`,
+  alpine_hut:     ar => `node["tourism"="alpine_hut"]["name"]${ar};\n  way["tourism"="alpine_hut"]["name"]${ar};`,
+  wilderness_hut: ar => `node["tourism"="wilderness_hut"]["name"]${ar};`,
+  camp:           ar => `node["tourism"="camp_site"]["name"]${ar};\n  way["tourism"="camp_site"]["name"]${ar};`,
+  picnic:         ar => `node["tourism"="picnic_site"]["name"]${ar};\n  way["tourism"="picnic_site"]["name"]${ar};`,
+  theme_park:     ar => `node["tourism"="theme_park"]["name"]${ar};\n  way["tourism"="theme_park"]["name"]${ar};\n  relation["tourism"="theme_park"]["name"]${ar};`,
+  historic:       ar => `node["historic"~"ruins|castle|fort|monument|memorial|archaeological_site|battlefield|mine|wayside_shrine|city_gate|tomb|abbey|manor|lighthouse"]["name"]${ar};\n  way["historic"~"ruins|castle|fort|monument|memorial|archaeological_site|battlefield|mine|city_gate|tomb|abbey|manor"]["name"]${ar};\n  relation["historic"~"ruins|castle|fort|archaeological_site|battlefield|abbey"]["name"]${ar};`,
+  prehistoric:    ar => `node["historic"~"tumulus|stone_circle|menhir"]["name"]${ar};\n  way["historic"~"tumulus|stone_circle"]["name"]${ar};`,
+  lighthouse:     ar => `node["man_made"="lighthouse"]["name"]${ar};\n  way["man_made"="lighthouse"]["name"]${ar};`,
+  tower:          ar => `node["man_made"~"windmill|watermill|tower"]["name"]${ar};\n  way["man_made"~"windmill|watermill"]["name"]${ar};`,
+  cairn:          ar => `node["man_made"="cairn"]${ar};`,
+  nature_reserve: ar => `node["leisure"="nature_reserve"]["name"]${ar};\n  way["leisure"="nature_reserve"]["name"]${ar};\n  relation["leisure"="nature_reserve"]["name"]${ar};\n  node["boundary"="protected_area"]["name"]${ar};\n  way["boundary"="protected_area"]["name"]${ar};\n  relation["boundary"="protected_area"]["name"]${ar};`,
+  park:           ar => `node["leisure"="park"]["name"]${ar};\n  way["leisure"="park"]["name"]${ar};\n  relation["leisure"="park"]["name"]${ar};`,
+  garden:         ar => `node["leisure"="garden"]["name"]${ar};\n  way["leisure"="garden"]["name"]${ar};`,
+  wildlife_hide:  ar => `node["leisure"~"bird_hide|wildlife_hide"]${ar};`,
   shelter:        ar => `node["amenity"="shelter"]["name"]${ar};`,
+  fountain:       ar => `node["amenity"="fountain"]["name"]${ar};\n  way["amenity"="fountain"]["name"]${ar};`,
+  church:         ar => `node["amenity"="place_of_worship"]["name"]${ar};\n  way["amenity"="place_of_worship"]["name"]${ar};\n  relation["amenity"="place_of_worship"]["name"]${ar};`,
+  zoo:            ar => `node["tourism"="zoo"]["name"]${ar};\n  way["tourism"="zoo"]["name"]${ar};\n  relation["tourism"="zoo"]["name"]${ar};`,
 };
 
 // ── IndexedDB area cache ──────────────────────────────────────────────────────
@@ -538,7 +588,7 @@ async function downloadCacheArea(lat, lng) {
     progressLabel.textContent = `Downloading ${typeIcon(t)} ${typeLabel(t)} (${i + 1}/${types.length})…`;
     progressFill.style.width = ((i / types.length) * 100) + '%';
 
-    const query = `[out:json][timeout:60];\n(\n  ${TYPE_QUERIES[t](ar)}\n);\nout body 5000;`;
+    const query = `[out:json][timeout:60];\n(\n  ${TYPE_QUERIES[t](ar)}\n);\nout body center 5000;`;
     const postOpts = {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -547,7 +597,7 @@ async function downloadCacheArea(lat, lng) {
     const parse = async res => {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const d = await res.json();
-      return (d.elements || []).map(el => osmToItem(el, lat, lng));
+      return (d.elements || []).map(el => osmToItem(el, lat, lng)).filter(Boolean);
     };
 
     try {
@@ -1088,14 +1138,14 @@ async function fetchOsmPoi(lat, lng, radius, limit = 50) {
   const enabledTypes = ALL_TYPES.filter(t => !activeTypes.has(t));
   if (enabledTypes.length === 0) { return []; }
   const clauses = enabledTypes.map(t => '  ' + TYPE_QUERIES[t](ar)).join('\n');
-  const query = `[out:json][timeout:25];\n(\n${clauses}\n);\nout body ${limit};`;
+  const query = `[out:json][timeout:25];\n(\n${clauses}\n);\nout body center ${limit};`;
 
   const postOpts = { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) };
   const parse = async res => {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const d = await res.json();
     if (!d.elements) throw new Error('No elements in response');
-    return d.elements.map(el => osmToItem(el, lat, lng));
+    return d.elements.map(el => osmToItem(el, lat, lng)).filter(Boolean);
   };
 
   // Race all direct endpoints; first valid response wins
@@ -1125,14 +1175,19 @@ function osmToItem(el, cLat, cLng) {
   let type = 'poi';
   for (const [k, v] of OSM_FILTERS) { if (tags[k] === v) { type = OSM_TYPE_MAP[v] || 'poi'; break; } }
   const name = tags.name || tags['name:en'] || tags['name:de'] || null;
+  // ways and relations use center coordinates from `out center`
+  const lat = el.lat ?? el.center?.lat;
+  const lng = el.lon ?? el.center?.lon;
+  if (lat == null || lng == null) return null;
+  const osmType = el.type === 'way' ? 'way' : el.type === 'relation' ? 'relation' : 'node';
   return {
-    id: 'osm_' + el.id, type,
+    id: 'osm_' + osmType + '_' + el.id, type,
     name: name || typeLabel(type), hasName: !!name,
-    lat: el.lat, lng: el.lon,
-    distance_m: haversine(cLat, cLng, el.lat, el.lon),
+    lat, lng,
+    distance_m: haversine(cLat, cLng, lat, lng),
     elevation: tags.ele ? parseInt(tags.ele) : null,
-    osm_url: `https://www.openstreetmap.org/node/${el.id}`,
-    gmaps_url: `https://maps.google.com/?q=${el.lat.toFixed(7)},${el.lon.toFixed(7)}`,
+    osm_url: `https://www.openstreetmap.org/${osmType}/${el.id}`,
+    gmaps_url: `https://maps.google.com/?q=${lat.toFixed(7)},${lng.toFixed(7)}`,
     wiki: tags.wikipedia || tags.wikidata || null,
     tags,
   };
@@ -1357,15 +1412,28 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function typeLabel(t) {
-  return ({summit:'Summit',waterfall:'Waterfall',spring:'Spring',cave:'Cave',
-    viewpoint:'Viewpoint',attraction:'Attraction',artwork:'Artwork',historic:'Historic',
-    nature_reserve:'Nature Reserve',shelter:'Shelter',poi:'POI'})[t]
-    || (t||'POI').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+  return ({
+    summit:'Summit', saddle:'Mountain Pass', waterfall:'Waterfall', spring:'Spring',
+    geyser:'Geyser', cave:'Cave', arch:'Natural Arch', glacier:'Glacier', cliff:'Cliff',
+    viewpoint:'Viewpoint', attraction:'Attraction', artwork:'Artwork',
+    museum:'Museum', alpine_hut:'Alpine Hut', wilderness_hut:'Wilderness Hut',
+    camp:'Campsite', picnic:'Picnic Site', theme_park:'Theme Park',
+    historic:'Historic', prehistoric:'Prehistoric', lighthouse:'Lighthouse', tower:'Tower/Mill', cairn:'Cairn',
+    nature_reserve:'Nature Reserve', park:'Park', garden:'Garden', wildlife_hide:'Wildlife Hide',
+    shelter:'Shelter', fountain:'Fountain', church:'Place of Worship', zoo:'Zoo', poi:'POI',
+  })[t] || (t||'POI').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
 }
 function typeIcon(t) {
-  return ({summit:'🏔️',waterfall:'💧',spring:'🌊',cave:'🕳️',
-    viewpoint:'👁️',attraction:'⭐',artwork:'🎨',historic:'🏛️',
-    nature_reserve:'🌲',shelter:'🏕️',poi:'📍'})[t] || '📍';
+  return ({
+    summit:'🏔️', saddle:'🥾', waterfall:'💧', spring:'🌊',
+    geyser:'♨️', cave:'🕳️', arch:'🌉', glacier:'🧊', cliff:'🪨',
+    viewpoint:'👁️', attraction:'⭐', artwork:'🎨',
+    museum:'🏛️', alpine_hut:'🏠', wilderness_hut:'🛖',
+    camp:'⛺', picnic:'🧺', theme_park:'🎡',
+    historic:'🏰', prehistoric:'🗿', lighthouse:'🗼', tower:'⚙️', cairn:'🪨',
+    nature_reserve:'🌲', park:'🌳', garden:'🌷', wildlife_hide:'🔭',
+    shelter:'🏕️', fountain:'⛲', church:'⛪', zoo:'🦁', poi:'📍',
+  })[t] || '📍';
 }
 
 // ── Cache area event wiring ───────────────────────────────────────────────────
