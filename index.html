@@ -249,6 +249,40 @@
       .leaflet-bar a:hover { background: var(--bg); }
       .poi-note-input { background: var(--bg); color: var(--text); }
     }
+
+    /* ── Photos ─────────────────────────────────────────────────────────────── */
+    .poi-photo-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 0.4rem; }
+    .poi-photo-thumb { width: 58px; height: 58px; object-fit: cover; border-radius: 5px; cursor: pointer; border: 1.5px solid var(--border); transition: opacity 0.12s; }
+    .poi-photo-thumb:hover { opacity: 0.8; }
+    .btn-add-photo { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.74rem; padding: 0.28rem 0.6rem; border: 1.5px dashed var(--border); border-radius: 5px; color: var(--muted); cursor: pointer; margin-top: 0.3rem; transition: border-color 0.12s, color 0.12s; background: transparent; }
+    .btn-add-photo:hover { border-color: var(--komoot); color: var(--komoot); }
+
+    /* ── Wikipedia preview ──────────────────────────────────────────────────── */
+    .poi-wiki-section { margin-top: 0.35rem; }
+    .wiki-toggle { width: 100%; text-align: left; background: transparent; border: none; font-size: 0.76rem; color: var(--komoot); cursor: pointer; padding: 0; font-weight: 600; }
+    .wiki-toggle:hover { text-decoration: underline; }
+    .wiki-content { font-size: 0.76rem; color: var(--muted); line-height: 1.5; margin-top: 0.25rem; }
+    .wiki-thumb { float: right; margin: 0 0 0.3rem 0.5rem; width: 70px; height: 70px; object-fit: cover; border-radius: 5px; }
+
+    /* ── Stats tab ──────────────────────────────────────────────────────────── */
+    #stats-pane { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; }
+    #stats-pane.hidden { display: none; }
+    .stat-section { background: var(--card); border-radius: 10px; box-shadow: var(--shadow); padding: 1rem; }
+    .stat-section h3 { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
+    .stat-numbers { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+    .stat-num { text-align: center; }
+    .stat-num .val { font-size: 2rem; font-weight: 800; color: var(--komoot); line-height: 1; }
+    .stat-num .lbl { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
+    .stat-type-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.45rem; font-size: 0.82rem; }
+    .stat-type-row .ico { font-size: 1rem; flex-shrink: 0; }
+    .stat-type-row .name { min-width: 90px; color: var(--text); }
+    .stat-bar-track { flex: 1; background: var(--border); border-radius: 3px; height: 7px; overflow: hidden; }
+    .stat-bar-fill { height: 100%; background: var(--komoot); border-radius: 3px; transition: width 0.4s; }
+    .stat-type-row .cnt { min-width: 24px; text-align: right; font-weight: 700; color: var(--komoot); }
+    .stat-visit-row { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 0.28rem 0; border-bottom: 1px solid var(--border); }
+    .stat-visit-row:last-child { border-bottom: none; }
+    .stat-visit-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 0.5rem; }
+    .stat-visit-date { color: var(--muted); white-space: nowrap; font-size: 0.75rem; }
   </style>
 </head>
 <body>
@@ -268,6 +302,7 @@
   <div class="tab-bar">
     <button class="active" data-tab="search">&#128269; Search</button>
     <button data-tab="visits">&#9989; My Visits</button>
+    <button data-tab="stats">&#128202; Stats</button>
   </div>
 
   <div class="controls">
@@ -342,6 +377,8 @@
       <button class="type-filter-btn" id="type-filter-btn">&#127919; Types</button>
       <div class="type-filter-dropdown" id="type-filter-dropdown"></div>
     </div>
+    <button class="type-filter-btn" id="nearest-btn" title="Find nearest unvisited cached POI from your GPS">&#128205; Nearest</button>
+    <button class="type-filter-btn" id="copy-link-btn" title="Copy shareable link to clipboard">&#128203; Share</button>
     <!-- Export -->
     <div class="export-wrap" id="export-wrap">
       <button class="export-btn" id="export-btn">&#8595; Export</button>
@@ -367,6 +404,7 @@
         Enter a location and tap <strong>Search</strong>, or use <strong>&#128205; My Location</strong>.
       </div>
     </div>
+    <div id="stats-pane" class="hidden"></div>
     <div id="map-pane">
       <div id="the-map"></div>
     </div>
@@ -526,9 +564,10 @@ const TYPE_QUERIES = {
 // ── IndexedDB area cache ──────────────────────────────────────────────────────
 let idb = null;
 const IDB_NAME    = 'poi-area-cache';
-const IDB_VERSION = 2;
+const IDB_VERSION = 3;
 const IDB_STORE   = 'pois';
 const IDB_AREAS   = 'cache_areas';
+const IDB_PHOTOS  = 'photos';
 
 function openIdb() {
   if (idb) return Promise.resolve(idb);
@@ -551,6 +590,10 @@ function openIdb() {
             old.forEach(a => st.put({ ...a, id: String(a.ts) }));
           } catch(_) {}
         }
+      }
+      if (!db.objectStoreNames.contains(IDB_PHOTOS)) {
+        const ps = db.createObjectStore(IDB_PHOTOS, { keyPath: 'id', autoIncrement: true });
+        ps.createIndex('poiId', 'poiId', { unique: false });
       }
     };
     req.onsuccess  = e => { idb = e.target.result; resolve(idb); };
@@ -591,6 +634,47 @@ function idbQueryRadius(lat, lng, radius) {
     };
     req.onerror = () => reject(req.error);
   }));
+}
+
+// ── Photo storage ─────────────────────────────────────────────────────────────
+function idbGetPhotos(poiId) {
+  return openIdb().then(db => new Promise((resolve, reject) => {
+    const tx  = db.transaction(IDB_PHOTOS, 'readonly');
+    const req = tx.objectStore(IDB_PHOTOS).index('poiId').getAll(poiId);
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror   = () => reject(req.error);
+  })).catch(() => []);
+}
+function idbAddPhoto(poiId, dataUrl) {
+  return openIdb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_PHOTOS, 'readwrite');
+    const req = tx.objectStore(IDB_PHOTOS).add({ poiId, dataUrl, ts: Date.now() });
+    req.onsuccess = () => resolve(req.result);
+    tx.onerror    = () => reject(tx.error);
+  }));
+}
+function idbDeletePhoto(id) {
+  return openIdb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_PHOTOS, 'readwrite');
+    tx.objectStore(IDB_PHOTOS).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror    = () => reject(tx.error);
+  }));
+}
+function resizeImageFile(file, maxPx = 1200) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const ratio = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = img.width * ratio; c.height = img.height * ratio;
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.78));
+    };
+    img.src = url;
+  });
 }
 
 // ── Cache metadata (IndexedDB) ────────────────────────────────────────────────
@@ -994,9 +1078,11 @@ document.querySelector('.tab-bar').addEventListener('click', e => {
   if (!btn) return;
   currentTab = btn.dataset.tab;
   document.querySelectorAll('.tab-bar button').forEach(b => b.classList.toggle('active', b === btn));
-  // Show/hide search controls
   document.querySelector('.controls').style.display = currentTab === 'search' ? '' : 'none';
+  $('cards-pane').classList.toggle('hidden', currentTab === 'stats');
+  $('stats-pane').classList.toggle('hidden', currentTab !== 'stats');
   if (currentTab === 'visits') renderVisits();
+  else if (currentTab === 'stats') renderStats();
   else renderList();
 });
 
@@ -1432,14 +1518,22 @@ function makeCard(poi) {
       <div class="poi-actions">
         <a href="${esc(poi.osm_url)}" target="_blank" rel="noopener noreferrer" class="btn-link">OSM</a>
         <a href="${esc(poi.gmaps_url)}" target="_blank" rel="noopener noreferrer" class="btn-link">Maps</a>
+        <a href="geo:${poi.lat},${poi.lng}?q=${poi.lat},${poi.lng}(${encodeURIComponent(poi.name)})" class="btn-link">&rarr; Nav</a>
         ${wikiHref ? `<a href="${esc(wikiHref)}" target="_blank" rel="noopener noreferrer" class="btn-link">Wiki</a>` : ''}
-        <button class="btn-copy-coords btn-link" data-lat="${poi.lat}" data-lng="${poi.lng}" title="${poi.lat}, ${poi.lng}">📋 Coords</button>
+        <button class="btn-copy-coords btn-link" data-lat="${poi.lat}" data-lng="${poi.lng}" title="${poi.lat}, ${poi.lng}">&#128203; Coords</button>
         <button class="btn-vis">${isVisited ? '✅ Visited' : 'Mark Visited'}</button>
       </div>
+      ${poi.wiki && poi.wiki.includes(':') && !/^Q\d+$/.test(poi.wiki) ? `
+      <div class="poi-wiki-section" data-wiki="${esc(poi.wiki)}">
+        <button class="wiki-toggle">&#128196; Wikipedia &#9660;</button>
+        <div class="wiki-content"></div>
+      </div>` : ''}
       <div class="poi-note-area">
         <div class="poi-note-text ${notes[poi.id] ? '' : 'placeholder'}" data-id="${esc(poi.id)}">${notes[poi.id] ? esc(notes[poi.id]) : 'Add a note…'}</div>
         <textarea class="poi-note-input" data-id="${esc(poi.id)}" rows="2" placeholder="Your notes about this place…">${notes[poi.id] ? esc(notes[poi.id]) : ''}</textarea>
       </div>
+      <div class="poi-photo-row"></div>
+      <button class="btn-add-photo">&#128247; Add photo<input type="file" accept="image/*" style="display:none"></button>
     </div>`;
 
   // Copy coords
@@ -1493,7 +1587,61 @@ function makeCard(poi) {
   });
   noteInput.addEventListener('keydown', e => { if (e.key === 'Escape') noteInput.blur(); });
 
+  // Wikipedia toggle
+  const wikiSection = card.querySelector('.poi-wiki-section');
+  if (wikiSection) {
+    const wikiToggle  = wikiSection.querySelector('.wiki-toggle');
+    const wikiContent = wikiSection.querySelector('.wiki-content');
+    let wikiLoaded = false;
+    wikiToggle.addEventListener('click', async () => {
+      const open = wikiContent.style.display !== 'none';
+      wikiContent.style.display = open ? 'none' : '';
+      wikiToggle.innerHTML = `&#128196; Wikipedia ${open ? '&#9660;' : '&#9650;'}`;
+      if (!open && !wikiLoaded) {
+        wikiLoaded = true;
+        wikiContent.textContent = 'Loading…';
+        const summary = await fetchWikiSummary(wikiSection.dataset.wiki);
+        if (summary) {
+          wikiContent.innerHTML =
+            (summary.thumbnail ? `<img class="wiki-thumb" src="${esc(summary.thumbnail.source)}" alt="">` : '') +
+            esc(summary.extract || '').slice(0, 400) + (summary.extract?.length > 400 ? '…' : '');
+        } else {
+          wikiContent.textContent = 'No summary available.';
+        }
+      }
+    });
+  }
+
+  // Photos — load existing thumbnails
+  const photoRow = card.querySelector('.poi-photo-row');
+  idbGetPhotos(poi.id).then(photos => photos.forEach(p => addPhotoThumb(photoRow, p)));
+
+  // Photos — add new
+  const addPhotoBtn = card.querySelector('.btn-add-photo');
+  const fileInput   = addPhotoBtn.querySelector('input[type="file"]');
+  addPhotoBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    if (!fileInput.files.length) return;
+    const dataUrl = await resizeImageFile(fileInput.files[0]);
+    fileInput.value = '';
+    const id = await idbAddPhoto(poi.id, dataUrl);
+    addPhotoThumb(photoRow, { id, dataUrl });
+  });
+
   return card;
+}
+
+function addPhotoThumb(container, photo) {
+  const img = document.createElement('img');
+  img.src = photo.dataUrl;
+  img.className = 'poi-photo-thumb';
+  img.title = 'Click to delete';
+  img.addEventListener('click', () => {
+    if (!confirm('Delete this photo?')) return;
+    idbDeletePhoto(photo.id);
+    img.remove();
+  });
+  container.appendChild(img);
 }
 
 // ── My Visits tab ─────────────────────────────────────────────────────────────
@@ -1534,6 +1682,88 @@ function renderVisits() {
   grid.className = 'poi-grid';
   items.forEach(poi => grid.appendChild(makeCard(poi)));
   area.appendChild(grid);
+}
+
+// ── Wikipedia ─────────────────────────────────────────────────────────────────
+const _wikiCache = {};
+async function fetchWikiSummary(wikiTag) {
+  if (_wikiCache[wikiTag]) return _wikiCache[wikiTag];
+  try {
+    const [lang, ...parts] = wikiTag.split(':');
+    const title = parts.join(':');
+    if (!lang || !title || lang.length > 3) return null;
+    const res = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    _wikiCache[wikiTag] = data;
+    return data;
+  } catch { return null; }
+}
+
+// ── Stats tab ─────────────────────────────────────────────────────────────────
+function renderStats() {
+  const pane = $('stats-pane');
+  pane.innerHTML = '';
+
+  // ── Summary numbers
+  const allVisited = [...visited];
+  const ratedArr   = Object.values(ratings).filter(v => v > 0);
+  const avgRating  = ratedArr.length ? (ratedArr.reduce((a, b) => a + b, 0) / ratedArr.length).toFixed(1) : '—';
+  const notesCount = Object.keys(notes).filter(k => notes[k]).length;
+
+  const summarySection = document.createElement('div');
+  summarySection.className = 'stat-section';
+  summarySection.innerHTML = `<h3>Overview</h3><div class="stat-numbers">
+    <div class="stat-num"><div class="val">${allVisited.length}</div><div class="lbl">Visited</div></div>
+    <div class="stat-num"><div class="val">${avgRating}</div><div class="lbl">Avg rating</div></div>
+    <div class="stat-num"><div class="val">${notesCount}</div><div class="lbl">Notes</div></div>
+    <div class="stat-num"><div class="val">${Object.keys(poiCache).length}</div><div class="lbl">In log</div></div>
+  </div>`;
+  pane.appendChild(summarySection);
+
+  // ── Type breakdown
+  const typeCounts = {};
+  Object.values(poiCache).filter(p => visited.has(p.id)).forEach(p => { typeCounts[p.type] = (typeCounts[p.type] || 0) + 1; });
+  const sortedTypes = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+  if (sortedTypes.length) {
+    const maxCount = sortedTypes[0][1];
+    const typeSection = document.createElement('div');
+    typeSection.className = 'stat-section';
+    typeSection.innerHTML = '<h3>By type</h3>' + sortedTypes.map(([t, n]) => `
+      <div class="stat-type-row">
+        <span class="ico">${typeIcon(t)}</span>
+        <span class="name">${typeLabel(t)}</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill" style="width:${Math.round(n / maxCount * 100)}%"></div></div>
+        <span class="cnt">${n}</span>
+      </div>`).join('');
+    pane.appendChild(typeSection);
+  }
+
+  // ── Exploration distance (straight-line between consecutive visits by date)
+  const visitedPois = Object.values(poiCache)
+    .filter(p => visited.has(p.id) && visitDates[p.id])
+    .sort((a, b) => (visitDates[a.id] || '').localeCompare(visitDates[b.id] || ''));
+  let totalDistM = 0;
+  for (let i = 1; i < visitedPois.length; i++) {
+    totalDistM += haversine(visitedPois[i-1].lat, visitedPois[i-1].lng, visitedPois[i].lat, visitedPois[i].lng);
+  }
+  if (visitedPois.length >= 2) {
+    const distStr = totalDistM >= 1000 ? (totalDistM / 1000).toFixed(1) + ' km' : Math.round(totalDistM) + ' m';
+    const distSection = document.createElement('div');
+    distSection.className = 'stat-section';
+    distSection.innerHTML = `<h3>Exploration distance</h3>
+      <div class="stat-numbers"><div class="stat-num"><div class="val">${distStr}</div><div class="lbl">as the crow flies between ${visitedPois.length} visits</div></div></div>`;
+    pane.appendChild(distSection);
+  }
+
+  // ── Recent visits
+  const recentSection = document.createElement('div');
+  recentSection.className = 'stat-section';
+  const recentItems = [...visitedPois].reverse().slice(0, 30);
+  recentSection.innerHTML = `<h3>Recent visits</h3>` + (recentItems.length
+    ? recentItems.map(p => `<div class="stat-visit-row"><span class="stat-visit-name">${typeIcon(p.type)} ${esc(p.name)}</span><span class="stat-visit-date">${visitDates[p.id] || ''}</span></div>`).join('')
+    : '<div style="color:var(--muted);font-size:0.83rem;">No visits yet.</div>');
+  pane.appendChild(recentSection);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1657,6 +1887,35 @@ $('cache-status-chip').addEventListener('click', () => {
   }
 });
 
+// ── Nearest unvisited ─────────────────────────────────────────────────────────
+$('nearest-btn').addEventListener('click', () => {
+  if (!validAreas().length) { alert('Cache an area first to use Nearest.'); return; }
+  const btn = $('nearest-btn');
+  btn.textContent = '⏳'; btn.disabled = true;
+  navigator.geolocation.getCurrentPosition(async pos => {
+    btn.textContent = '📍 Nearest'; btn.disabled = false;
+    const { latitude: lat, longitude: lng } = pos.coords;
+    const all = await idbQueryRadius(lat, lng, 100000);
+    const unvisited = all.filter(p => !visited.has(p.id)).sort((a, b) => a.distance_m - b.distance_m);
+    if (!unvisited.length) { alert('No unvisited cached POIs found within 100 km.'); return; }
+    const p = unvisited[0];
+    const dist = p.distance_m < 1000 ? Math.round(p.distance_m) + ' m' : (p.distance_m / 1000).toFixed(1) + ' km';
+    if (confirm(`Nearest unvisited:\n\n${typeIcon(p.type)} ${p.name}\n${typeLabel(p.type)} · ${dist} away\n\nOpen in maps?`)) {
+      window.open(`geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${encodeURIComponent(p.name)})`, '_blank');
+    }
+  }, () => { btn.textContent = '📍 Nearest'; btn.disabled = false; alert('Could not get location.'); }, { timeout: 10000 });
+});
+
+// ── Copy shareable link ───────────────────────────────────────────────────────
+$('copy-link-btn').addEventListener('click', () => {
+  navigator.clipboard.writeText(location.href).then(() => {
+    const btn = $('copy-link-btn');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '✓ Copied!';
+    setTimeout(() => btn.innerHTML = orig, 2000);
+  });
+});
+
 // Init cache chip on load
 let swRegistration = null;
 
@@ -1736,6 +1995,16 @@ cacheBC.addEventListener('message', async e => {
     updateCacheChip();
     drawCacheCircles();
     if (failed > 0) alert(`Cache complete with ${failed} error(s). ${count} POIs cached.`);
+  } else if (type === 'TILE_PREFETCH_START') {
+    progressBar.classList.add('visible');
+    progressLabel.textContent = `Pre-fetching map tiles… (0/${e.data.total})`;
+  } else if (type === 'TILE_PREFETCH_PROGRESS') {
+    progressFill.style.width = ((e.data.done / e.data.total) * 100) + '%';
+    progressLabel.textContent = `Pre-fetching map tiles… (${e.data.done}/${e.data.total})`;
+  } else if (type === 'TILE_PREFETCH_DONE') {
+    progressFill.style.width = '100%';
+    progressLabel.textContent = `Tiles cached (${e.data.total})`;
+    setTimeout(() => progressBar.classList.remove('visible'), 2000);
   }
 });
 </script>

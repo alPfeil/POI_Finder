@@ -2,9 +2,10 @@
 
 const BC_CHANNEL    = 'poi-cache-channel';
 const IDB_NAME      = 'poi-area-cache';
-const IDB_VERSION   = 2;
+const IDB_VERSION   = 3;
 const IDB_STORE     = 'pois';
 const IDB_AREAS     = 'cache_areas';
+const IDB_PHOTOS    = 'photos';
 
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -94,6 +95,10 @@ function openIdb() {
       }
       if (!db.objectStoreNames.contains(IDB_AREAS)) {
         db.createObjectStore(IDB_AREAS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(IDB_PHOTOS)) {
+        const ps = db.createObjectStore(IDB_PHOTOS, { keyPath: 'id', autoIncrement: true });
+        ps.createIndex('poiId', 'poiId', { unique: false });
       }
     };
     req.onsuccess  = e => { _idb = e.target.result; resolve(_idb); };
@@ -199,5 +204,43 @@ async function doDownload({ lat, lng, radius, batches }) {
   await idbPutArea({ id: `${lat}_${lng}_${radius}`, lat, lng, radius, ts: now, count: newPois.length });
 
   bc.postMessage({ type: 'CACHE_DONE', count: newPois.length, failed, lat, lng, radius });
+
+  // Pre-fetch map tiles so the map works offline too
+  await prefetchTiles(lat, lng, radius, bc);
+
   bc.close();
+}
+
+// ── Tile pre-fetch ────────────────────────────────────────────────────────────
+function _tileXY(lat, lng, z) {
+  const x = Math.floor((lng + 180) / 360 * (1 << z));
+  const lr = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(lr) + 1 / Math.cos(lr)) / Math.PI) / 2 * (1 << z));
+  return { x, y };
+}
+
+async function prefetchTiles(lat, lng, radiusM, bc) {
+  const dLat = radiusM / 111320;
+  const dLng = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
+  const urls = [];
+  for (const z of [12, 13, 14, 15]) {
+    const { x: x1, y: y1 } = _tileXY(lat + dLat, lng - dLng, z);
+    const { x: x2, y: y2 } = _tileXY(lat - dLat, lng + dLng, z);
+    for (let x = x1; x <= x2; x++)
+      for (let y = y1; y <= y2; y++)
+        urls.push(`https://a.tile.openstreetmap.org/${z}/${x}/${y}.png`);
+  }
+  bc.postMessage({ type: 'TILE_PREFETCH_START', total: urls.length });
+  const cache = await caches.open(TILE_CACHE);
+  let done = 0;
+  for (let i = 0; i < urls.length; i += 16) {
+    await Promise.allSettled(urls.slice(i, i + 16).map(async url => {
+      if (await cache.match(url)) return;
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+      if (r?.ok) cache.put(url, r);
+    }));
+    done = Math.min(i + 16, urls.length);
+    bc.postMessage({ type: 'TILE_PREFETCH_PROGRESS', done, total: urls.length });
+  }
+  bc.postMessage({ type: 'TILE_PREFETCH_DONE', total: urls.length });
 }
