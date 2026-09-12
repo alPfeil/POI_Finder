@@ -484,8 +484,9 @@ const TYPE_QUERIES = {
 // ── IndexedDB area cache ──────────────────────────────────────────────────────
 let idb = null;
 const IDB_NAME    = 'poi-area-cache';
-const IDB_VERSION = 1;
+const IDB_VERSION = 2;
 const IDB_STORE   = 'pois';
+const IDB_AREAS   = 'cache_areas';
 
 function openIdb() {
   if (idb) return Promise.resolve(idb);
@@ -493,9 +494,21 @@ function openIdb() {
     const req = indexedDB.open(IDB_NAME, IDB_VERSION);
     req.onupgradeneeded = e => {
       const db = e.target.result;
+      const upgTx = e.target.transaction;
       if (!db.objectStoreNames.contains(IDB_STORE)) {
         const store = db.createObjectStore(IDB_STORE, { keyPath: 'id' });
         store.createIndex('type', 'type', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(IDB_AREAS)) {
+        db.createObjectStore(IDB_AREAS, { keyPath: 'id' });
+        // Migrate existing localStorage data into IDB on first upgrade
+        if (e.oldVersion >= 1) {
+          try {
+            const old = JSON.parse(localStorage.getItem(CACHE_AREAS_KEY) || '[]');
+            const st = upgTx.objectStore(IDB_AREAS);
+            old.forEach(a => st.put({ ...a, id: String(a.ts) }));
+          } catch(_) {}
+        }
       }
     };
     req.onsuccess  = e => { idb = e.target.result; resolve(idb); };
@@ -538,15 +551,27 @@ function idbQueryRadius(lat, lng, radius) {
   }));
 }
 
-// ── Cache metadata (localStorage, tiny) ──────────────────────────────────────
+// ── Cache metadata (IndexedDB) ────────────────────────────────────────────────
 function loadCacheAreas() {
-  try { return JSON.parse(localStorage.getItem(CACHE_AREAS_KEY)) || []; } catch { return []; }
+  return openIdb().then(db => new Promise((resolve, reject) => {
+    const tx  = db.transaction(IDB_AREAS, 'readonly');
+    const req = tx.objectStore(IDB_AREAS).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror   = () => reject(req.error);
+  })).catch(() => []);
 }
 function saveCacheAreas() {
-  localStorage.setItem(CACHE_AREAS_KEY, JSON.stringify(cacheAreas));
+  openIdb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_AREAS, 'readwrite');
+    const st = tx.objectStore(IDB_AREAS);
+    st.clear();
+    cacheAreas.forEach(a => st.put({ ...a, id: String(a.ts) }));
+    tx.oncomplete = resolve;
+    tx.onerror    = () => reject(tx.error);
+  }));
 }
 
-let cacheAreas = loadCacheAreas(); // [{ lat, lng, radius, ts, count }, ...]
+let cacheAreas = []; // populated by initCacheAreas() below
 let cacheCircleLayers = [];
 let bannerDismissed = false;
 
@@ -595,6 +620,18 @@ function checkOutsideBanner(lat, lng) {
 }
 
 // ── Cache download ────────────────────────────────────────────────────────────
+function buildCacheBatches(lat, lng, radius) {
+  const ar = `(around:${radius},${lat},${lng})`;
+  const BATCH_SIZE = 6;
+  const batches = [];
+  for (let i = 0; i < ALL_TYPES.length; i += BATCH_SIZE) {
+    const typeGroup = ALL_TYPES.slice(i, i + BATCH_SIZE);
+    const clauses = typeGroup.map(t => '  ' + TYPE_QUERIES[t](ar)).join('\n');
+    batches.push(`[out:json][timeout:60];\n(\n${clauses}\n);\nout body center 5000;`);
+  }
+  return batches;
+}
+
 async function downloadCacheArea(lat, lng, radius = CACHE_RADIUS_M) {
   const progressBar   = $('cache-progress-bar');
   const progressFill  = $('cache-progress-fill');
@@ -602,74 +639,56 @@ async function downloadCacheArea(lat, lng, radius = CACHE_RADIUS_M) {
 
   progressBar.classList.add('visible');
   progressFill.style.width = '0%';
+  progressLabel.textContent = 'Starting download…';
   $('cache-btn').disabled = true;
   bannerDismissed = false;
   $('outside-cache-banner').classList.remove('visible');
 
-  const types = ALL_TYPES;
-  const ar = `(around:${radius},${lat},${lng})`;
-  let newPois = [];
-  let failed = 0;
+  const batches = buildCacheBatches(lat, lng, radius);
 
-  for (let i = 0; i < types.length; i++) {
-    const t = types[i];
-    progressLabel.textContent = `Downloading ${typeIcon(t)} ${typeLabel(t)} (${i + 1}/${types.length})…`;
-    progressFill.style.width = ((i / types.length) * 100) + '%';
+  if (swRegistration) {
+    // Delegate to Service Worker — survives screen lock and app switching
+    swRegistration.active.postMessage({ type: 'CACHE_AREA', lat, lng, radius, batches });
+    return; // UI is driven by BroadcastChannel listener below
+  }
 
-    const query = `[out:json][timeout:60];\n(\n  ${TYPE_QUERIES[t](ar)}\n);\nout body center 5000;`;
-    const postOpts = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'data=' + encodeURIComponent(query),
-    };
-    const parse = async res => {
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const d = await res.json();
-      return (d.elements || []).map(el => osmToItem(el, lat, lng)).filter(Boolean);
-    };
-
+  // Fallback: run inline (won't survive backgrounding)
+  let newPois = [], failed = 0, completed = 0;
+  const parse = async res => {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    return (d.elements || []).map(el => osmToItem(el, lat, lng)).filter(Boolean);
+  };
+  progressLabel.textContent = `Downloading cache… (0/${batches.length})`;
+  const results = await Promise.allSettled(batches.map(async query => {
+    const postOpts = { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) };
     try {
       let items;
       try {
-        items = await Promise.any(OVERPASS_ENDPOINTS.map(ep =>
-          fetch(ep, { ...postOpts, signal: AbortSignal.timeout(55000) }).then(parse)
-        ));
+        items = await Promise.any(OVERPASS_ENDPOINTS.map(ep => fetch(ep, { ...postOpts, signal: AbortSignal.timeout(55000) }).then(parse)));
       } catch {
         const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
-        const proxies = [
-          'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl),
-          'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl),
-        ];
-        items = await Promise.any(proxies.map(u =>
-          fetch(u, { signal: AbortSignal.timeout(55000) }).then(parse)
-        ));
+        items = await Promise.any(['https://corsproxy.io/?url=' + encodeURIComponent(targetUrl), 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl)].map(u => fetch(u, { signal: AbortSignal.timeout(55000) }).then(parse)));
       }
-      newPois = newPois.concat(items);
-    } catch {
-      failed++;
-    }
-  }
-
+      completed++;
+      progressFill.style.width = ((completed / batches.length) * 100) + '%';
+      progressLabel.textContent = `Downloading cache… (${completed}/${batches.length})`;
+      return items;
+    } catch { failed++; completed++; return []; }
+  }));
+  results.forEach(r => { if (r.status === 'fulfilled') newPois = newPois.concat(r.value); });
   progressFill.style.width = '100%';
   progressLabel.textContent = `Saving ${newPois.length} POIs…`;
-
-  // Accumulate: idbPutAll uses keyPath 'id' so duplicates are overwritten, not doubled
   if (newPois.length > 0) await idbPutAll(newPois);
-
-  // Expire old areas and add new one
   const now = Date.now();
   cacheAreas = cacheAreas.filter(a => (now - a.ts) < CACHE_TTL_MS);
   cacheAreas.push({ lat, lng, radius, ts: now, count: newPois.length });
   saveCacheAreas();
   updateCacheChip();
   drawCacheCircles();
-
   progressBar.classList.remove('visible');
   $('cache-btn').disabled = false;
-
-  if (failed > 0) {
-    alert(`Cache download complete with ${failed} category error(s). ${newPois.length} POIs added.`);
-  }
+  if (failed > 0) alert(`Cache download complete with ${failed} error(s). ${newPois.length} POIs added.`);
 }
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
@@ -1540,7 +1559,44 @@ $('cache-status-chip').addEventListener('click', () => {
 });
 
 // Init cache chip on load
-updateCacheChip();
+let swRegistration = null;
+
+// Load cache-area metadata from IDB, then init UI
+async function initCacheAreas() {
+  cacheAreas = await loadCacheAreas();
+  updateCacheChip();
+}
+initCacheAreas();
+
+// Service Worker — keeps download alive when screen locks or app is backgrounded
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js')
+    .then(reg => { swRegistration = reg; })
+    .catch(() => {}); // falls back to inline download gracefully
+}
+
+// BroadcastChannel receives progress/completion from the SW
+const cacheBC = new BroadcastChannel('poi-cache-channel');
+cacheBC.addEventListener('message', async e => {
+  const { type, completed, total, count, failed } = e.data;
+  const progressBar   = $('cache-progress-bar');
+  const progressFill  = $('cache-progress-fill');
+  const progressLabel = $('cache-progress-label');
+  if (type === 'CACHE_PROGRESS') {
+    progressBar.classList.add('visible');
+    progressFill.style.width = ((completed / total) * 100) + '%';
+    progressLabel.textContent = `Downloading cache… (${completed}/${total})`;
+  } else if (type === 'CACHE_DONE') {
+    cacheAreas = await loadCacheAreas();
+    progressFill.style.width = '100%';
+    progressLabel.textContent = `Saved ${count} POIs`;
+    setTimeout(() => progressBar.classList.remove('visible'), 2000);
+    $('cache-btn').disabled = false;
+    updateCacheChip();
+    drawCacheCircles();
+    if (failed > 0) alert(`Cache complete with ${failed} error(s). ${count} POIs cached.`);
+  }
+});
 </script>
 </body>
 </html>
