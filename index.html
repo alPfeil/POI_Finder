@@ -4,7 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Komoot POI Explorer</title>
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#6db33f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="POI Explorer" />
+  <!-- Map -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <style>
     /* Tab bar */
     .tab-bar { background: var(--komoot-dark); display: flex; flex-shrink: 0; }
@@ -209,6 +218,37 @@
     #btn-refresh-cache { background: #f5a623; color: #fff; border: none; border-radius: 6px; padding: 0.3rem 0.85rem; font-size: 0.8rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
     #btn-refresh-cache:hover { background: #e0961e; }
     #btn-dismiss-banner { margin-left: auto; background: transparent; border: none; color: #7a5c00; cursor: pointer; font-size: 1rem; padding: 0 0.2rem; }
+
+    /* ── Dark mode ────────────────────────────────────────────────────────────── */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1e; --card: #2c2c2e; --text: #e5e5e7; --muted: #98989d;
+        --border: #3a3a3c; --visited-bg: #232325; --visited-text: #666;
+        --shadow: 0 2px 8px rgba(0,0,0,0.5); --star-off: #48484a;
+      }
+      header { box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
+      .cg input, .cg select { background: var(--bg); color: var(--text); }
+      .cg input::placeholder { color: var(--muted); }
+      .btn-locate { background: var(--bg); color: var(--text); }
+      .controls-toggle { background: var(--bg); color: var(--text); }
+      #stats-bar { background: #1e2a1e; border-color: #2a3e2a; color: #7db87d; }
+      .info-banner { background: #1e2a1e; border-color: #2a3e2a; color: #7db87d; }
+      .warn-banner { background: #2a2010; border-color: #4a3800; color: #c8a030; }
+      #cache-progress-bar { background: #1e2a1e; border-color: #2a3e2a; }
+      #cache-progress-bar .cpb-label { color: #7db87d; }
+      #cache-progress-bar .cpb-track { background: #2a3e2a; }
+      #outside-cache-banner { background: #2a2010; border-color: #4a3800; color: #c8a030; }
+      #btn-dismiss-banner { color: #c8a030; }
+      .type-filter-dropdown, .export-dropdown { background: var(--card); }
+      .gist-card { background: var(--card); }
+      .gist-row input { background: var(--bg); color: var(--text); }
+      .gist-status.ok { color: #7db87d; }
+      .leaflet-popup-content-wrapper { background: var(--card); color: var(--text); }
+      .leaflet-popup-tip { background: var(--card); }
+      .leaflet-bar a { background: var(--card); color: var(--text); border-color: var(--border); }
+      .leaflet-bar a:hover { background: var(--bg); }
+      .poi-note-input { background: var(--bg); color: var(--text); }
+    }
   </style>
 </head>
 <body>
@@ -220,6 +260,7 @@
       <span class="sync-indicator" id="sync-indicator"></span>
       <span class="cache-status-chip" id="cache-status-chip" title="Offline cache status"></span>
       <button class="btn-small" id="cache-btn" title="Download POIs around current location for offline use">&#8659; Cache Area</button>
+      <button class="btn-small" id="nearby-btn" title="Notify when near an unvisited cached POI">&#128276; Nearby</button>
       <button class="btn-small" id="gist-btn" title="Sync with GitHub Gist">&#128279; Sync</button>
     </div>
   </header>
@@ -382,6 +423,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const VISITED_KEY      = 'komoot_poi_visited_v1';
@@ -706,7 +748,11 @@ let activeTypes   = new Set();
 let currentView   = 'cards';
 let currentTab    = 'search';
 let leafletMap    = null;
+let markerCluster = null;
 let mapMarkers    = {};
+// virtual scroll state
+let _lazyItems = [], _lazyStart = 0, _scrollObserver = null;
+const LAZY_PAGE = 40;
 
 function saveVisited() {
   localStorage.setItem(VISITED_KEY, JSON.stringify([...visited]));
@@ -730,28 +776,56 @@ function saveNotes() {
 
 // ── Persist last search ────────────────────────────────────────────────────────
 function saveSearchState() {
-  localStorage.setItem(SEARCH_KEY, JSON.stringify({
+  const state = {
     place: $('place-input').value,
     lat:   $('lat-input').value,
     lng:   $('lng-input').value,
     radius: $('radius-input').value,
     limit:  $('limit-input').value,
     sort:   $('sort-select').value,
-  }));
+  };
+  localStorage.setItem(SEARCH_KEY, JSON.stringify(state));
+  // Also encode in URL hash for shareability
+  const p = new URLSearchParams();
+  if (state.lat)              p.set('lat', state.lat);
+  if (state.lng)              p.set('lng', state.lng);
+  if (state.place)            p.set('p',   state.place);
+  if (state.radius && state.radius !== '1') p.set('r', state.radius);
+  if (state.limit  && state.limit  !== '50') p.set('n', state.limit);
+  if (state.sort   && state.sort   !== 'distance') p.set('s', state.sort);
+  history.replaceState(null, '', p.toString() ? '#' + p.toString() : location.pathname + location.search);
 }
 function restoreSearchState() {
+  // URL hash takes priority (enables shared/bookmarked links)
+  const hash = location.hash.slice(1);
+  if (hash) {
+    try {
+      const p = new URLSearchParams(hash);
+      if (p.get('lat'))   $('lat-input').value    = p.get('lat');
+      if (p.get('lng'))   $('lng-input').value    = p.get('lng');
+      if (p.get('p'))     $('place-input').value  = p.get('p');
+      if (p.get('r'))     $('radius-input').value = p.get('r');
+      if (p.get('n'))     $('limit-input').value  = p.get('n');
+      if (p.get('s'))     $('sort-select').value  = p.get('s');
+      return;
+    } catch (_) {}
+  }
   try {
     const s = JSON.parse(localStorage.getItem(SEARCH_KEY) || 'null');
     if (!s) return;
     if (s.place)  $('place-input').value  = s.place;
-    if (s.lat)    $('lat-input').value     = s.lat;
-    if (s.lng)    $('lng-input').value     = s.lng;
-    if (s.radius) $('radius-input').value  = s.radius;
-    if (s.limit)  $('limit-input').value   = s.limit;
-    if (s.sort)   $('sort-select').value   = s.sort;
+    if (s.lat)    $('lat-input').value    = s.lat;
+    if (s.lng)    $('lng-input').value    = s.lng;
+    if (s.radius) $('radius-input').value = s.radius;
+    if (s.limit)  $('limit-input').value  = s.limit;
+    if (s.sort)   $('sort-select').value  = s.sort;
   } catch (_) {}
 }
 restoreSearchState();
+// Auto-search if URL hash has coordinates
+if (location.hash && new URLSearchParams(location.hash.slice(1)).get('lat')) {
+  window.addEventListener('DOMContentLoaded', () => doSearch(), { once: true });
+}
 
 // ── GitHub Gist Sync ──────────────────────────────────────────────────────────
 const GIST_TOKEN_KEY = 'poi_gist_token';
@@ -949,24 +1023,25 @@ function setView(v) {
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 function initMap() {
-  if (leafletMap) { setTimeout(() => leafletMap.invalidateSize(), 50); drawCacheCircle(); return; }
+  if (leafletMap) { setTimeout(() => leafletMap.invalidateSize(), 50); drawCacheCircles(); return; }
   leafletMap = L.map('the-map', { zoomControl: true });
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 19,
   }).addTo(leafletMap);
   leafletMap.setView([48.137, 11.576], 12);
+  markerCluster = L.markerClusterGroup({ chunkedLoading: true, maxClusterRadius: 50 });
+  leafletMap.addLayer(markerCluster);
   setTimeout(() => { leafletMap.invalidateSize(); drawCacheCircles(); }, 100);
 }
 
 function syncMapMarkers(items) {
   if (!leafletMap) return;
-  // Remove markers not in current items
   const currentIds = new Set(items.map(p => p.id));
   for (const [id, marker] of Object.entries(mapMarkers)) {
-    if (!currentIds.has(id)) { marker.remove(); delete mapMarkers[id]; }
+    if (!currentIds.has(id)) { markerCluster.removeLayer(marker); delete mapMarkers[id]; }
   }
-  // Add or update markers
+  const newMarkers = [];
   items.forEach(poi => {
     const isVisited = visited.has(poi.id);
     const color = isVisited ? '#999' : '#6db33f';
@@ -978,7 +1053,7 @@ function syncMapMarkers(items) {
     if (mapMarkers[poi.id]) {
       mapMarkers[poi.id].setIcon(icon);
     } else {
-      const marker = L.marker([poi.lat, poi.lng], { icon }).addTo(leafletMap);
+      const marker = L.marker([poi.lat, poi.lng], { icon });
       const dist = poi.distance_m < 1000 ? Math.round(poi.distance_m) + ' m' : (poi.distance_m / 1000).toFixed(1) + ' km';
       marker.bindPopup(() => {
         const isV = visited.has(poi.id);
@@ -1005,9 +1080,10 @@ function syncMapMarkers(items) {
         return div;
       });
       mapMarkers[poi.id] = marker;
+      newMarkers.push(marker);
     }
   });
-  // Fit bounds to all markers on first render
+  if (newMarkers.length > 0) markerCluster.addLayers(newMarkers);
   if (items.length > 0 && Object.keys(mapMarkers).length === items.length) {
     const latlngs = items.map(p => [p.lat, p.lng]);
     leafletMap.fitBounds(L.latLngBounds(latlngs).pad(0.1));
@@ -1266,7 +1342,12 @@ function getFilteredItems() {
 
 function renderList() {
   if (currentTab === 'visits') { renderVisits(); return; }
+  if (_scrollObserver) { _scrollObserver.disconnect(); _scrollObserver = null; }
+
   const items = getFilteredItems();
+  _lazyItems = items;
+  _lazyStart = 0;
+
   const shown = items.length, total = allItems.length;
   $('results-count').textContent = shown === total
     ? `${total} result${total !== 1 ? 's' : ''}`
@@ -1289,11 +1370,29 @@ function renderList() {
   } else {
     const grid = document.createElement('div');
     grid.className = 'poi-grid';
-    items.forEach(poi => grid.appendChild(makeCard(poi)));
     area.appendChild(grid);
+    _renderLazyPage(grid, area);
   }
 
   if (currentView !== 'cards') syncMapMarkers(items);
+}
+
+function _renderLazyPage(grid, area) {
+  const slice = _lazyItems.slice(_lazyStart, _lazyStart + LAZY_PAGE);
+  slice.forEach(poi => grid.appendChild(makeCard(poi)));
+  _lazyStart += slice.length;
+  if (_lazyStart >= _lazyItems.length) return;
+  // Observe a sentinel so the next page loads when user nears the bottom
+  const sentinel = area.querySelector('.scroll-sentinel') || document.createElement('div');
+  sentinel.className = 'scroll-sentinel';
+  sentinel.style.cssText = 'height:1px;width:100%;';
+  area.appendChild(sentinel);
+  if (_scrollObserver) _scrollObserver.disconnect();
+  _scrollObserver = new IntersectionObserver(entries => {
+    if (!entries[0].isIntersecting) return;
+    _renderLazyPage(grid, area);
+  }, { root: area, rootMargin: '300px' });
+  _scrollObserver.observe(sentinel);
 }
 
 function makeCard(poi) {
@@ -1560,6 +1659,48 @@ $('cache-status-chip').addEventListener('click', () => {
 
 // Init cache chip on load
 let swRegistration = null;
+
+// ── Proximity notifications ───────────────────────────────────────────────────
+let _proximityWatchId = null;
+const _notifiedPois   = new Set();
+const PROXIMITY_M     = 300;
+
+async function toggleProximityWatch() {
+  const btn = $('nearby-btn');
+  if (_proximityWatchId != null) {
+    navigator.geolocation.clearWatch(_proximityWatchId);
+    _proximityWatchId = null;
+    btn.innerHTML = '&#128276; Nearby';
+    btn.style.background = '';
+    return;
+  }
+  if (!('Notification' in window)) { alert('Notifications are not supported in this browser.'); return; }
+  if (!validAreas().length) { alert('Cache an area first (↓ Cache Area) to enable proximity alerts.'); return; }
+  const perm = Notification.permission === 'granted'
+    ? 'granted'
+    : await Notification.requestPermission();
+  if (perm !== 'granted') { alert('Notification permission denied.'); return; }
+
+  _proximityWatchId = navigator.geolocation.watchPosition(async pos => {
+    const { latitude: lat, longitude: lng } = pos.coords;
+    if (!isInsideCache(lat, lng)) return;
+    const nearby = await idbQueryRadius(lat, lng, PROXIMITY_M);
+    for (const poi of nearby) {
+      if (!visited.has(poi.id) && !_notifiedPois.has(poi.id)) {
+        _notifiedPois.add(poi.id);
+        new Notification(`📍 ${poi.name}`, {
+          body: `Unvisited ${typeLabel(poi.type)} · ${Math.round(poi.distance_m)} m away`,
+          tag: poi.id,
+        });
+      }
+    }
+  }, null, { enableHighAccuracy: true, timeout: 30000, maximumAge: 15000 });
+
+  btn.innerHTML = '&#128277; Nearby ON';
+  btn.style.background = 'rgba(255,255,255,0.35)';
+}
+
+$('nearby-btn').addEventListener('click', toggleProximityWatch);
 
 // Load cache-area metadata from IDB, then init UI
 async function initCacheAreas() {
