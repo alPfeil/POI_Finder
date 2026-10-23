@@ -413,26 +413,51 @@
 
 <!-- CACHE RADIUS PANEL -->
 <div id="cache-panel" style="position:fixed;inset:0;background:rgba(0,0,0,0.45);display:none;align-items:center;justify-content:center;z-index:1000;padding:1rem;">
-  <div class="gist-card" style="max-width:340px;">
+  <div class="gist-card" style="max-width:400px;">
     <h2>&#8659; Cache Area</h2>
-    <p class="hint">Download all POIs within a radius for offline use.</p>
-    <div id="cache-loc-row" style="display:none;margin-bottom:1rem;">
-      <div style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.4rem;">Location</div>
-      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;margin-bottom:0.3rem;">
-        <input type="radio" name="cache-loc" id="cache-loc-search" style="accent-color:var(--komoot);" />
-        <span id="cache-loc-search-label">Search location</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
-        <input type="radio" name="cache-loc" id="cache-loc-gps" style="accent-color:var(--komoot);" />
-        My GPS location
-      </label>
+    <!-- Mode tabs -->
+    <div style="display:flex;border:1.5px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:1rem;font-size:0.82rem;">
+      <button id="cache-tab-radius" style="flex:1;padding:0.35rem 0.5rem;border:none;cursor:pointer;font-size:0.82rem;font-weight:600;transition:background 0.12s,color 0.12s;">By Radius</button>
+      <button id="cache-tab-area" style="flex:1;padding:0.35rem 0.5rem;border:none;border-left:1.5px solid var(--border);cursor:pointer;font-size:0.82rem;font-weight:600;transition:background 0.12s,color 0.12s;">By Area Name</button>
     </div>
-    <div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:1rem;">
-      <label style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;">Radius (km)</label>
-      <input type="number" id="cache-radius-input" value="10" min="1" max="100" step="1"
-        style="padding:0.5rem 0.75rem;border:1.5px solid var(--border);border-radius:6px;font-size:0.95rem;outline:none;width:120px;" />
-      <span style="font-size:0.72rem;color:var(--muted);">Larger radius = longer download time</span>
+
+    <!-- Radius form (default) -->
+    <div id="cache-form-radius">
+      <p class="hint" style="margin-bottom:0.75rem;">Download all POIs within a radius around a point for offline use.</p>
+      <div id="cache-loc-row" style="display:none;margin-bottom:1rem;">
+        <div style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.4rem;">Location</div>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;margin-bottom:0.3rem;">
+          <input type="radio" name="cache-loc" id="cache-loc-search" style="accent-color:var(--komoot);" />
+          <span id="cache-loc-search-label">Search location</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
+          <input type="radio" name="cache-loc" id="cache-loc-gps" style="accent-color:var(--komoot);" />
+          My GPS location
+        </label>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:1rem;">
+        <label style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;">Radius (km)</label>
+        <input type="number" id="cache-radius-input" value="10" min="1" max="100" step="1"
+          style="padding:0.5rem 0.75rem;border:1.5px solid var(--border);border-radius:6px;font-size:0.95rem;outline:none;width:120px;" />
+        <span style="font-size:0.72rem;color:var(--muted);">Larger radius = longer download time</span>
+      </div>
     </div>
+
+    <!-- Area Name form -->
+    <div id="cache-form-area" style="display:none;">
+      <p class="hint" style="margin-bottom:0.75rem;">Download all POIs within an administrative area (state, district, region) for fast offline searching anywhere inside it.</p>
+      <div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:0.75rem;">
+        <label style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;">Area name</label>
+        <div style="display:flex;gap:0.5rem;">
+          <input type="text" id="cache-area-input" placeholder="e.g. Bavaria, Landkreis München"
+            style="flex:1;padding:0.5rem 0.75rem;border:1.5px solid var(--border);border-radius:6px;font-size:0.88rem;outline:none;min-width:0;" />
+          <button id="cache-area-resolve-btn" class="btn-search" style="padding:0.45rem 0.85rem;white-space:nowrap;">Find</button>
+        </div>
+      </div>
+      <div id="cache-area-candidates" style="display:none;margin-bottom:0.75rem;max-height:140px;overflow-y:auto;border:1.5px solid var(--border);border-radius:6px;padding:0.5rem;"></div>
+      <div id="cache-area-info" style="display:none;border-radius:6px;padding:0.6rem 0.75rem;font-size:0.82rem;margin-bottom:0.75rem;"></div>
+    </div>
+
     <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
       <button class="btn-outline" id="cache-panel-cancel">Cancel</button>
       <button class="btn-search" id="cache-panel-start" style="padding:0.45rem 1.25rem;">Download</button>
@@ -626,8 +651,11 @@ function idbQueryRadius(lat, lng, radius) {
     const req = tx.objectStore(IDB_STORE).getAll();
     req.onsuccess = () => {
       const all = req.result || [];
-      // Re-compute distance from the new search centre, filter to radius
+      // Cheap bounding-box pre-filter before the more expensive haversine
+      const dLat = radius / 111320;
+      const dLng = radius / (111320 * Math.cos(lat * Math.PI / 180));
       const within = all
+        .filter(p => p.lat >= lat - dLat && p.lat <= lat + dLat && p.lng >= lng - dLng && p.lng <= lng + dLng)
         .map(p => ({ ...p, distance_m: haversine(lat, lng, p.lat, p.lng) }))
         .filter(p => p.distance_m <= radius);
       resolve(within);
@@ -706,7 +734,13 @@ function validAreas() {
 }
 
 function isInsideCache(lat, lng) {
-  return validAreas().some(a => haversine(lat, lng, a.lat, a.lng) <= a.radius);
+  return validAreas().some(a => {
+    if (a.bbox) {
+      return lat >= a.bbox.minLat && lat <= a.bbox.maxLat &&
+             lng >= a.bbox.minLng && lng <= a.bbox.maxLng;
+    }
+    return haversine(lat, lng, a.lat, a.lng) <= a.radius;
+  });
 }
 
 function updateCacheChip() {
@@ -716,7 +750,10 @@ function updateCacheChip() {
   const totalPois = areas.reduce((s, a) => s + (a.count || 0), 0);
   const oldest = Math.floor((Date.now() - Math.min(...areas.map(a => a.ts))) / 86400000);
   const ageStr = oldest === 0 ? 'today' : oldest === 1 ? '1d ago' : oldest + 'd ago';
-  chip.innerHTML = `&#128190; ${totalPois} POIs · ${areas.length} area${areas.length > 1 ? 's' : ''} · ${ageStr}`;
+  const areaLabel = areas.length === 1 && areas[0].areaName
+    ? areas[0].areaName
+    : `${areas.length} area${areas.length > 1 ? 's' : ''}`;
+  chip.innerHTML = `&#128190; ${totalPois} POIs · ${areaLabel} · ${ageStr}`;
   chip.className = 'cache-status-chip';
 }
 
@@ -725,13 +762,21 @@ function drawCacheCircles() {
   cacheCircleLayers.forEach(l => l.remove());
   cacheCircleLayers = [];
   for (const a of validAreas()) {
-    const circle = L.circle([a.lat, a.lng], {
-      radius: a.radius,
-      color: '#6db33f', weight: 1.5, opacity: 0.5,
-      fillColor: '#6db33f', fillOpacity: 0.06,
-      dashArray: '6 4', interactive: false,
-    }).addTo(leafletMap);
-    cacheCircleLayers.push(circle);
+    let layer;
+    if (a.bbox) {
+      layer = L.rectangle(
+        [[a.bbox.minLat, a.bbox.minLng], [a.bbox.maxLat, a.bbox.maxLng]],
+        { color: '#6db33f', weight: 1.5, opacity: 0.5, fillColor: '#6db33f', fillOpacity: 0.06, dashArray: '6 4', interactive: false }
+      ).addTo(leafletMap);
+    } else {
+      layer = L.circle([a.lat, a.lng], {
+        radius: a.radius,
+        color: '#6db33f', weight: 1.5, opacity: 0.5,
+        fillColor: '#6db33f', fillOpacity: 0.06,
+        dashArray: '6 4', interactive: false,
+      }).addTo(leafletMap);
+    }
+    cacheCircleLayers.push(layer);
   }
 }
 
@@ -758,7 +803,108 @@ function buildCacheBatches(lat, lng, radius) {
   return batches;
 }
 
-async function downloadCacheArea(lat, lng, radius = CACHE_RADIUS_M) {
+// ── Admin area download ───────────────────────────────────────────────────────
+
+function buildAreaNameBatches(overpassAreaId) {
+  const ar = `(area.searchArea)`;
+  const areaHeader = `area(${overpassAreaId})->.searchArea;\n`;
+  const BATCH_SIZE = 6;
+  const batches = [];
+  for (let i = 0; i < ALL_TYPES.length; i += BATCH_SIZE) {
+    const typeGroup = ALL_TYPES.slice(i, i + BATCH_SIZE);
+    const clauses = typeGroup.map(t => '  ' + TYPE_QUERIES[t](ar)).join('\n');
+    batches.push(`[out:json][timeout:180];\n${areaHeader}(\n${clauses}\n);\nout body center 50000;`);
+  }
+  return batches;
+}
+
+async function resolveAreaCandidates(areaName) {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(areaName)}&format=json&limit=6`;
+  const res = await fetch(url, { headers: { 'Accept-Language': 'en', 'User-Agent': 'POI-Explorer/1.0' } });
+  if (!res.ok) throw new Error('Nominatim error: ' + res.status);
+  const results = await res.json();
+  return results
+    .filter(r => r.osm_type === 'relation')
+    .map(r => ({
+      osmId: parseInt(r.osm_id),
+      displayName: r.display_name,
+      bbox: {
+        minLat: parseFloat(r.boundingbox[0]),
+        maxLat: parseFloat(r.boundingbox[1]),
+        minLng: parseFloat(r.boundingbox[2]),
+        maxLng: parseFloat(r.boundingbox[3]),
+      },
+    }));
+}
+
+async function downloadCacheAreaByName(candidate) {
+  const overpassAreaId = 3600000000 + candidate.osmId;
+  const batches = buildAreaNameBatches(overpassAreaId);
+  const centerLat = (candidate.bbox.minLat + candidate.bbox.maxLat) / 2;
+  const centerLng = (candidate.bbox.minLng + candidate.bbox.maxLng) / 2;
+  const areaMetadata = {
+    id: `admin_${candidate.osmId}`,
+    areaName: candidate.displayName.split(',')[0].trim(),
+    bbox: candidate.bbox,
+    lat: centerLat,
+    lng: centerLng,
+  };
+
+  const progressBar   = $('cache-progress-bar');
+  const progressFill  = $('cache-progress-fill');
+  const progressLabel = $('cache-progress-label');
+
+  progressBar.classList.add('visible');
+  progressFill.style.width = '0%';
+  progressLabel.textContent = `Downloading ${areaMetadata.areaName}…`;
+  $('cache-btn').disabled = true;
+  bannerDismissed = false;
+  $('outside-cache-banner').classList.remove('visible');
+
+  if (swRegistration) {
+    swRegistration.active.postMessage({ type: 'CACHE_AREA', lat: centerLat, lng: centerLng, radius: 0, batches, areaMetadata });
+    return;
+  }
+
+  // Fallback inline (no SW)
+  let newPois = [], failed = 0, completed = 0;
+  const parse = async res => {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    return (d.elements || []).map(el => osmToItem(el, centerLat, centerLng)).filter(Boolean);
+  };
+  const results = await Promise.allSettled(batches.map(async query => {
+    const postOpts = { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) };
+    try {
+      let items;
+      try {
+        items = await Promise.any(OVERPASS_ENDPOINTS.map(ep => fetch(ep, { ...postOpts, signal: AbortSignal.timeout(180000) }).then(parse)));
+      } catch {
+        const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
+        items = await Promise.any(['https://corsproxy.io/?url=' + encodeURIComponent(targetUrl), 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl)].map(u => fetch(u, { signal: AbortSignal.timeout(180000) }).then(parse)));
+      }
+      completed++;
+      progressFill.style.width = ((completed / batches.length) * 100) + '%';
+      progressLabel.textContent = `Downloading ${areaMetadata.areaName}… (${completed}/${batches.length})`;
+      return items;
+    } catch { failed++; completed++; return []; }
+  }));
+  results.forEach(r => { if (r.status === 'fulfilled') newPois = newPois.concat(r.value); });
+  progressFill.style.width = '100%';
+  progressLabel.textContent = `Saving ${newPois.length} POIs…`;
+  if (newPois.length > 0) await idbPutAll(newPois);
+  const now = Date.now();
+  cacheAreas = cacheAreas.filter(a => (now - a.ts) < CACHE_TTL_MS);
+  cacheAreas.push({ ...areaMetadata, ts: now, count: newPois.length });
+  saveCacheAreas();
+  updateCacheChip();
+  drawCacheCircles();
+  progressBar.classList.remove('visible');
+  $('cache-btn').disabled = false;
+  if (failed > 0) alert(`Cache download complete with ${failed} error(s). ${newPois.length} POIs added.`);
+}
+
+
   const progressBar   = $('cache-progress-bar');
   const progressFill  = $('cache-progress-fill');
   const progressLabel = $('cache-progress-label');
@@ -1813,10 +1959,9 @@ function typeIcon(t) {
 }
 
 // ── Cache area event wiring ───────────────────────────────────────────────────
-function openCachePanel(onConfirm) {
+function openCachePanel(onRadiusConfirm) {
   $('cache-radius-input').value = Math.round(CACHE_RADIUS_M / 1000);
 
-  // Show location source options if search coords are already filled in
   const searchLat = parseFloat($('lat-input').value);
   const searchLng = parseFloat($('lng-input').value);
   const hasSearchLoc = !isNaN(searchLat) && !isNaN(searchLng);
@@ -1832,24 +1977,120 @@ function openCachePanel(onConfirm) {
     $('cache-loc-gps').checked = true;
   }
 
+  // Tab switching
+  let activeMode = 'radius';
+  const tabRadius = $('cache-tab-radius');
+  const tabArea = $('cache-tab-area');
+  const formRadius = $('cache-form-radius');
+  const formArea = $('cache-form-area');
+
+  function switchTab(mode) {
+    activeMode = mode;
+    if (mode === 'radius') {
+      tabRadius.style.cssText = 'flex:1;padding:0.35rem 0.5rem;border:none;cursor:pointer;font-size:0.82rem;font-weight:600;transition:background 0.12s,color 0.12s;background:var(--komoot);color:#fff;';
+      tabArea.style.cssText = 'flex:1;padding:0.35rem 0.5rem;border:none;border-left:1.5px solid var(--border);cursor:pointer;font-size:0.82rem;font-weight:600;transition:background 0.12s,color 0.12s;background:transparent;color:var(--muted);';
+      formRadius.style.display = '';
+      formArea.style.display = 'none';
+    } else {
+      tabArea.style.cssText = 'flex:1;padding:0.35rem 0.5rem;border:none;border-left:1.5px solid var(--border);cursor:pointer;font-size:0.82rem;font-weight:600;transition:background 0.12s,color 0.12s;background:var(--komoot);color:#fff;';
+      tabRadius.style.cssText = 'flex:1;padding:0.35rem 0.5rem;border:none;cursor:pointer;font-size:0.82rem;font-weight:600;transition:background 0.12s,color 0.12s;background:transparent;color:var(--muted);';
+      formArea.style.display = '';
+      formRadius.style.display = 'none';
+    }
+  }
+  switchTab('radius');
+  tabRadius.onclick = () => switchTab('radius');
+  tabArea.onclick = () => switchTab('area');
+
+  // Reset area form state
+  let resolvedCandidate = null;
+  $('cache-area-input').value = '';
+  $('cache-area-candidates').style.display = 'none';
+  $('cache-area-info').style.display = 'none';
+
+  function showAreaInfo(candidate) {
+    const b = candidate.bbox;
+    const latSpan = (b.maxLat - b.minLat).toFixed(2);
+    const lngSpan = (b.maxLng - b.minLng).toFixed(2);
+    const info = $('cache-area-info');
+    info.style.cssText = 'display:block;border-radius:6px;padding:0.6rem 0.75rem;font-size:0.82rem;margin-bottom:0.75rem;background:#e8f4e8;border:1px solid #c8e8c8;color:#2a5c2a;';
+    info.innerHTML = `<strong>${candidate.displayName.split(',').slice(0, 2).join(', ')}</strong><br><span style="color:var(--muted);font-size:0.78rem;">Bounding box: ${latSpan}° × ${lngSpan}°${latSpan > 1 || lngSpan > 1 ? ' — large area, download may take several minutes' : ''}</span>`;
+    resolvedCandidate = candidate;
+  }
+
+  $('cache-area-resolve-btn').onclick = async () => {
+    const name = $('cache-area-input').value.trim();
+    if (!name) return;
+    const btn = $('cache-area-resolve-btn');
+    btn.textContent = '…';
+    btn.disabled = true;
+    resolvedCandidate = null;
+    $('cache-area-info').style.display = 'none';
+    $('cache-area-candidates').style.display = 'none';
+    try {
+      const candidates = await resolveAreaCandidates(name);
+      if (candidates.length === 0) {
+        const info = $('cache-area-info');
+        info.style.cssText = 'display:block;border-radius:6px;padding:0.6rem 0.75rem;font-size:0.82rem;margin-bottom:0.75rem;background:#fde8e8;border:1px solid #f5c6c6;color:#c0392b;';
+        info.textContent = 'No area found. Try a more specific name, e.g. "Bavaria, Germany" or "Landkreis München, Germany".';
+      } else {
+        if (candidates.length > 1) {
+          const container = $('cache-area-candidates');
+          container.style.display = '';
+          container.innerHTML = '<div style="font-size:0.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.4rem;">Select area:</div>';
+          candidates.forEach((c, i) => {
+            const label = document.createElement('label');
+            label.style.cssText = 'display:flex;align-items:flex-start;gap:0.4rem;font-size:0.82rem;cursor:pointer;padding:0.2rem 0;';
+            const radio = document.createElement('input');
+            radio.type = 'radio'; radio.name = 'cache-area-candidate'; radio.value = String(i);
+            radio.style.cssText = 'accent-color:var(--komoot);margin-top:0.15rem;flex-shrink:0;';
+            if (i === 0) radio.checked = true;
+            const span = document.createElement('span');
+            span.textContent = c.displayName.split(',').slice(0, 3).join(', ');
+            label.appendChild(radio); label.appendChild(span);
+            label.onclick = () => showAreaInfo(c);
+            container.appendChild(label);
+          });
+        }
+        showAreaInfo(candidates[0]);
+      }
+    } catch (e) {
+      const info = $('cache-area-info');
+      info.style.cssText = 'display:block;border-radius:6px;padding:0.6rem 0.75rem;font-size:0.82rem;margin-bottom:0.75rem;background:#fde8e8;border:1px solid #f5c6c6;color:#c0392b;';
+      info.textContent = 'Failed to resolve area: ' + e.message;
+    }
+    btn.textContent = 'Find';
+    btn.disabled = false;
+  };
+
   const panel = $('cache-panel');
   panel.style.display = 'flex';
   const start = $('cache-panel-start');
   const cancel = $('cache-panel-cancel');
-  const close = () => { panel.style.display = 'none'; start.onclick = null; cancel.onclick = null; };
+  const close = () => {
+    panel.style.display = 'none';
+    start.onclick = null; cancel.onclick = null;
+    tabRadius.onclick = null; tabArea.onclick = null;
+  };
 
   start.onclick = () => {
-    close();
-    const radiusM = Math.max(1, parseInt($('cache-radius-input').value) || 10) * 1000;
-    const useSearch = hasSearchLoc && $('cache-loc-search').checked;
-    if (useSearch) {
-      onConfirm(searchLat, searchLng, radiusM);
+    if (activeMode === 'area') {
+      if (!resolvedCandidate) { alert('Please use the "Find" button to resolve an area first.'); return; }
+      close();
+      downloadCacheAreaByName(resolvedCandidate);
     } else {
-      navigator.geolocation.getCurrentPosition(
-        pos => onConfirm(pos.coords.latitude, pos.coords.longitude, radiusM),
-        err => alert('Could not get location: ' + err.message),
-        { timeout: 10000 }
-      );
+      close();
+      const radiusM = Math.max(1, parseInt($('cache-radius-input').value) || 10) * 1000;
+      const useSearch = hasSearchLoc && $('cache-loc-search').checked;
+      if (useSearch) {
+        onRadiusConfirm(searchLat, searchLng, radiusM);
+      } else {
+        navigator.geolocation.getCurrentPosition(
+          pos => onRadiusConfirm(pos.coords.latitude, pos.coords.longitude, radiusM),
+          err => alert('Could not get location: ' + err.message),
+          { timeout: 10000 }
+        );
+      }
     }
   };
   cancel.onclick = close;
@@ -1876,7 +2117,8 @@ $('cache-status-chip').addEventListener('click', () => {
   const total = areas.reduce((s, a) => s + (a.count || 0), 0);
   const lines = areas.map((a, i) => {
     const d = Math.floor((Date.now() - a.ts) / 86400000);
-    return `Area ${i + 1}: ${a.count || '?'} POIs · ${d === 0 ? 'today' : d + 'd ago'}`;
+    const name = a.areaName || `Area ${i + 1}`;
+    return `${name}: ${a.count || '?'} POIs · ${d === 0 ? 'today' : d + 'd ago'}`;
   }).join('\n');
   if (confirm(`Cached areas:\n${lines}\n\nTotal: ${total} POIs\n\nClear all cached areas?`)) {
     cacheAreas = [];

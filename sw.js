@@ -152,7 +152,7 @@ self.addEventListener('message', event => {
   }
 });
 
-async function doDownload({ lat, lng, radius, batches }) {
+async function doDownload({ lat, lng, radius, batches, areaMetadata }) {
   const bc = new BroadcastChannel(BC_CHANNEL);
   let newPois = [];
   let failed  = 0;
@@ -166,6 +166,9 @@ async function doDownload({ lat, lng, radius, batches }) {
     return (d.elements || []).map(el => osmToItem(el, lat, lng)).filter(Boolean);
   };
 
+  // Admin-area batches need more time; radius batches use the original 55s
+  const batchTimeout = areaMetadata ? 180000 : 55000;
+
   const results = await Promise.allSettled(batches.map(async query => {
     const postOpts = {
       method: 'POST',
@@ -176,14 +179,14 @@ async function doDownload({ lat, lng, radius, batches }) {
       let items;
       try {
         items = await Promise.any(OVERPASS_ENDPOINTS.map(ep =>
-          fetch(ep, { ...postOpts, signal: AbortSignal.timeout(55000) }).then(parse)
+          fetch(ep, { ...postOpts, signal: AbortSignal.timeout(batchTimeout) }).then(parse)
         ));
       } catch {
         const targetUrl = OVERPASS_ENDPOINTS[0] + '?data=' + encodeURIComponent(query);
         items = await Promise.any([
           'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl),
           'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl),
-        ].map(u => fetch(u, { signal: AbortSignal.timeout(55000) }).then(parse)));
+        ].map(u => fetch(u, { signal: AbortSignal.timeout(batchTimeout) }).then(parse)));
       }
       completed++;
       bc.postMessage({ type: 'CACHE_PROGRESS', completed, total: batches.length });
@@ -201,12 +204,19 @@ async function doDownload({ lat, lng, radius, batches }) {
   if (newPois.length > 0) await idbPutAll(newPois);
 
   const now = Date.now();
-  await idbPutArea({ id: `${lat}_${lng}_${radius}`, lat, lng, radius, ts: now, count: newPois.length });
+  const areaMeta = areaMetadata
+    ? { ...areaMetadata, ts: now, count: newPois.length }
+    : { id: `${lat}_${lng}_${radius}`, lat, lng, radius, ts: now, count: newPois.length };
+  await idbPutArea(areaMeta);
 
   bc.postMessage({ type: 'CACHE_DONE', count: newPois.length, failed, lat, lng, radius });
 
   // Pre-fetch map tiles so the map works offline too
-  await prefetchTiles(lat, lng, radius, bc);
+  if (areaMetadata?.bbox) {
+    await prefetchTilesBbox(areaMetadata.bbox, bc);
+  } else {
+    await prefetchTiles(lat, lng, radius, bc);
+  }
 
   bc.close();
 }
@@ -229,6 +239,40 @@ async function prefetchTiles(lat, lng, radiusM, bc) {
     for (let x = x1; x <= x2; x++)
       for (let y = y1; y <= y2; y++)
         urls.push(`https://a.tile.openstreetmap.org/${z}/${x}/${y}.png`);
+  }
+  bc.postMessage({ type: 'TILE_PREFETCH_START', total: urls.length });
+  const cache = await caches.open(TILE_CACHE);
+  let done = 0;
+  for (let i = 0; i < urls.length; i += 16) {
+    await Promise.allSettled(urls.slice(i, i + 16).map(async url => {
+      if (await cache.match(url)) return;
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+      if (r?.ok) cache.put(url, r);
+    }));
+    done = Math.min(i + 16, urls.length);
+    bc.postMessage({ type: 'TILE_PREFETCH_PROGRESS', done, total: urls.length });
+  }
+  bc.postMessage({ type: 'TILE_PREFETCH_DONE', total: urls.length });
+}
+
+// ── Tile pre-fetch for bbox (admin-area downloads) ────────────────────────────
+async function prefetchTilesBbox(bbox, bc) {
+  const latSpan = bbox.maxLat - bbox.minLat;
+  const lngSpan = bbox.maxLng - bbox.minLng;
+  // For large areas cap at zoom 13 to avoid tens-of-thousands of tiles
+  const maxZoom = (latSpan > 0.5 || lngSpan > 0.5) ? 13 : 15;
+  const urls = [];
+  for (const z of [12, 13, 14, 15].filter(z => z <= maxZoom)) {
+    const { x: x1, y: y1 } = _tileXY(bbox.maxLat, bbox.minLng, z);
+    const { x: x2, y: y2 } = _tileXY(bbox.minLat, bbox.maxLng, z);
+    for (let x = x1; x <= x2; x++)
+      for (let y = y1; y <= y2; y++)
+        urls.push(`https://a.tile.openstreetmap.org/${z}/${x}/${y}.png`);
+  }
+  // Hard cap: skip prefetch if the bbox is enormous (e.g. whole country)
+  if (urls.length > 3000) {
+    bc.postMessage({ type: 'TILE_PREFETCH_DONE', total: 0 });
+    return;
   }
   bc.postMessage({ type: 'TILE_PREFETCH_START', total: urls.length });
   const cache = await caches.open(TILE_CACHE);
