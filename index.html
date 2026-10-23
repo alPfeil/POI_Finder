@@ -905,6 +905,7 @@ async function downloadCacheAreaByName(candidate) {
 }
 
 
+async function downloadCacheArea(lat, lng, radius = CACHE_RADIUS_M) {
   const progressBar   = $('cache-progress-bar');
   const progressFill  = $('cache-progress-fill');
   const progressLabel = $('cache-progress-label');
